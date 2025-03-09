@@ -1,4 +1,4 @@
-##### [🇬🇧 English](https://github.com/chwair/ambidex)  /  [🇸🇮 Slovensko](https://github.com/chwair/ambidex/blob/main/README_sl.md)
+##### [🇬🇧 English](https://github.com/chwair/ambidex)  /  [🇸🇮 Slovensko](https://github.com/chwair/ambidex/blob/master/README_sl.md)
 ---
 <div align="center"><img alt="Ambidex Logo" src="https://github.com/user-attachments/assets/2c237c90-4a83-4ad2-bbe8-4a3f46582371">
 <h1>Ambidex</h1>
