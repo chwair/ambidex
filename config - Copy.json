@@ -1,0 +1,50 @@
+{
+    "backup_dir": "D:/Documents/save backup/backups",
+    "games": {
+        "Zero Escape: The Nonary Games": {
+            "save_paths": [
+                "D:/Documents/My Games/Zero Escape The Nonary Games"
+            ],
+            "backups": [
+                {
+                    "timestamp": "20250309_140622",
+                    "datetime": "2025-03-09 14:06:22",
+                    "directory": "D:\\Documents\\save backup\\backups\\Zero_Escape_The_Nonary_Games\\20250309_140622"
+                }
+            ],
+            "image": "D:\\Documents\\save backup\\images\\zero_escape_the_nonary_games.jpg",
+            "parent_dir": "D:/Documents/My Games/Zero Escape The Nonary Games"
+        },
+        "NieR Replicant ver.1.22474487139...": {
+            "save_paths": [
+                "D:/Documents/My Games/NieR Replicant ver.1.22474487139 - Copy"
+            ],
+            "backups": [
+                {
+                    "timestamp": "20250309_140200",
+                    "datetime": "2025-03-09 14:02:00",
+                    "directory": "D:\\Documents\\save backup\\backups\\NieR_Replicant_ver122474487139\\20250309_140200"
+                },
+                {
+                    "timestamp": "20250309_140623",
+                    "datetime": "2025-03-09 14:06:23",
+                    "directory": "D:\\Documents\\save backup\\backups\\NieR_Replicant_ver122474487139\\20250309_140623"
+                },
+                {
+                    "timestamp": "20250309_140651",
+                    "datetime": "2025-03-09 14:06:51",
+                    "directory": "D:\\Documents\\save backup\\backups\\NieR_Replicant_ver122474487139\\20250309_140651"
+                }
+            ],
+            "image": "D:\\Documents\\save backup\\images\\nier_replicant_ver.1.22474487139....jpg",
+            "parent_dir": "D:/Documents/My Games/NieR Replicant ver.1.22474487139 - Copy"
+        }
+    },
+    "igdb_client_id": "n0s1059qb6wxykkj4j3q88qr66fppp",
+    "igdb_client_secret": "xf635tr5ldmt3pvobv2o1sgqwyj6d9",
+    "igdb_auth": {
+        "access_token": "zubw7li6im7jil7m6eo1gy9p69uh9x",
+        "client_id": "n0s1059qb6wxykkj4j3q88qr66fppp",
+        "expires_at": 1746616620.8820102
+    }
+}
