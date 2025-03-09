@@ -30,6 +30,10 @@ jobs:
       run: |
         python -m nuitka --standalone --windows-icon-from-ico=icon.ico --enable-plugin=pyside6 --windows-disable-console --assume-yes-for-downloads --show-progress --output-dir=build ambidex.py
         
+    - name: Copy icon
+      run: |
+        copy icon.ico build\\icon.ico
+      
     - name: Upload built application
       uses: actions/upload-artifact@v4
       with:
