@@ -36,7 +36,6 @@ ENV/
 backups/
 images/
 config.json
-*.ico
 g/
 
 # Nuitka
