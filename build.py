@@ -2,7 +2,6 @@
 Build script for compiling the application with Nuitka
 """
 import os
-import sys
 import subprocess
 
 def build():
@@ -23,6 +22,8 @@ def build():
     
     # Run the build
     subprocess.run(cmd)
+    # Copy icon file to build directory
+    os.system("copy icon.ico build\\icon.ico")
 
 if __name__ == "__main__":
     build()

@@ -1109,7 +1109,7 @@ class GameSaveBackup(QMainWindow):
         widget = QWidget()
         widget.setObjectName("gameWidget")
         widget.setMinimumWidth(140)
-        widget.setMinimumHeight(240)
+        widget.setMinimumHeight(200)
         widget.setMaximumWidth(180)
         widget.setStyleSheet("""
             #gameWidget {
@@ -1125,59 +1125,41 @@ class GameSaveBackup(QMainWindow):
         
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(8, 8, 8, 8)  # Add some padding
+        layout.setSpacing(4)  # Reduce spacing between elements
         
         # Create a container for the image and icon
         image_container = QWidget()
-        image_container.setMinimumHeight(180)
-        image_container.setMaximumHeight(180)
+        # Don't set minimum/maximum height to allow natural sizing based on content
         image_layout = QVBoxLayout(image_container)
         image_layout.setContentsMargins(0, 0, 0, 0)
-        image_layout.setSpacing(0)  # Remove spacing between icon and image
-        
-        # Create a container just for the icon
-        icon_container = QWidget()
-        icon_container.setFixedHeight(32)  # Match icon size
-        icon_layout = QHBoxLayout(icon_container)
-        icon_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Load small icon if available
-        icon_size = 32
-        if game_data.get("thumb_data"):
-            try:
-                import base64
-                icon_label = QLabel()
-                icon_label.setStyleSheet("border: none; background: transparent;")
-                icon_pixmap = QPixmap()
-                binary_data = base64.b64decode(game_data["thumb_data"])
-                icon_pixmap.loadFromData(binary_data)
-                icon_label.setPixmap(icon_pixmap.scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                icon_layout.addWidget(icon_label, 0, Qt.AlignLeft)
-                icon_layout.addStretch()  # Push icon to the left
-            except Exception as e:
-                print(f"Error loading thumbnail: {e}")
-        
-        image_layout.addWidget(icon_container)
+        image_layout.setSpacing(0)  # Remove spacing between elements
         
         # Image label
         image_label = QLabel()
         image_label.setStyleSheet("border: none; background: transparent;")
         image_label.setAlignment(Qt.AlignCenter)
-        image_label.setScaledContents(True)
+        
+        # Set fixed dimensions for the image placeholder with correct aspect ratio
+        image_width = 120
+        image_height = int(image_width * (352/264))  # Maintain original aspect ratio
         
         if game_data.get("image") and os.path.exists(game_data["image"]):
             pixmap = QPixmap(game_data["image"])
-            image_label.setPixmap(pixmap.scaled(120, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            # Scale the image properly maintaining aspect ratio
+            image_label.setPixmap(pixmap.scaled(image_width, image_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            # Set a fixed size to ensure consistent layout
+            image_label.setFixedSize(image_width, image_height)
         else:
             image_label.setText(game_name)
             image_label.setStyleSheet("background-color: #333; color: white; border: 1px solid #555;")
-            image_label.setFixedSize(120, 180)
+            image_label.setFixedSize(image_width, image_height)
         
         image_layout.addWidget(image_label, 0, Qt.AlignCenter)
-        layout.addWidget(image_container)
+        layout.addWidget(image_container, 0, Qt.AlignCenter)
         
-        # Game name label
+        # Game name label with proper padding and no extra space
         name_label = QLabel(game_name)
-        name_label.setStyleSheet("border: none; color: #e0e0e0; padding: 4px 0;")  # Add some vertical padding
+        name_label.setStyleSheet("border: none; color: #e0e0e0; padding: 4px 0;")
         name_label.setAlignment(Qt.AlignCenter)
         name_label.setWordWrap(True)
         layout.addWidget(name_label)
