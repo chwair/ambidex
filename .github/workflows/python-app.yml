@@ -28,7 +28,7 @@ jobs:
         
     - name: Build with Nuitka
       run: |
-        python -m nuitka --standalone --windows-icon-from-ico=icon.ico --enable-plugin=pyside6 --include-data-dir=./images=./images --windows-disable-console --assume-yes-for-downloads --show-progress --output-dir=build ambidex.py
+        python -m nuitka --standalone --windows-icon-from-ico=icon.ico --enable-plugin=pyside6 --include-data-dir=./images/=images --windows-disable-console --assume-yes-for-downloads --show-progress --output-dir=build ambidex.py
         
     - name: Upload built application
       uses: actions/upload-artifact@v4
