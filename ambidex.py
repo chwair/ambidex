@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QLabel, QMessageBox, QListWidget, QListWidgetItem,
     QListView, QTreeView, QAbstractItemView, QDialog, QRadioButton,
     QButtonGroup, QHBoxLayout, QFormLayout, QLayout, QSizePolicy,
-    QMenu
+    QMenu, QComboBox, QPushButton, QColorDialog, QFrame, QStyledItemDelegate, QStyleOptionViewItem, QStyle
 )
 from PySide6.QtGui import QPixmap, QIcon, QCursor, QAction, QDrag, QPainter, QColor, QStyleHints
 from PySide6.QtCore import Qt, QSize, Signal, QObject, QThread, QMetaObject, Slot, QRunnable, QThreadPool, QPoint, QRect, QMimeData
@@ -23,7 +23,7 @@ import threading
 
 class WorkerSignals(QObject):
     """
-    Defines the signals available for worker threads
+    Signals available for worker threads
     """
     auth_complete = Signal(dict)
     auth_failed = Signal(str)
@@ -34,7 +34,9 @@ class WorkerSignals(QObject):
 
 
 class IGDBAuthWorker(QRunnable):
-    """Worker for IGDB authentication using QThreadPool instead of QThread"""
+    """
+    Worker for IGDB Auth
+    """
     def __init__(self, client_id, client_secret):
         super().__init__()
         self.client_id = client_id
@@ -132,6 +134,16 @@ class IGDBImageDownloadWorker(QRunnable):
         self.destination_folder = destination_folder
         self.signals = WorkerSignals()
     
+    def make_safe_filename(self, name):
+        """Create a safe filename from a game name"""
+        safe_name = name.lower().replace(" ", "_")
+        # Replace various special characters
+        for char in [':', '/', '\\', '*', '?', '"', '<', '>', '|', '.']:
+            safe_name = safe_name.replace(char, "_")
+        # Keep only alphanumeric and certain safe characters
+        safe_name = ''.join(c for c in safe_name if c.isalnum() or c in ['_', '-'])
+        return safe_name
+    
     def run(self):
         try:
             if not self.game_data:
@@ -149,7 +161,6 @@ class IGDBImageDownloadWorker(QRunnable):
                 return
                 
             # IGDB uses image IDs that need to be formatted into URLs
-            # Using the tall image size for game capsules (t_720p)
             image_id = cover_data["image_id"]
             image_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{image_id}.jpg"
             
@@ -161,7 +172,7 @@ class IGDBImageDownloadWorker(QRunnable):
             os.makedirs(self.destination_folder, exist_ok=True)
             
             # Create a safe filename based on the game name
-            safe_name = self.game_data["name"].lower().replace(" ", "_").replace(":", "").replace("/", "_")
+            safe_name = self.make_safe_filename(self.game_data["name"])
             file_path = os.path.join(self.destination_folder, f"{safe_name}.jpg")
             
             with open(file_path, 'wb') as f:
@@ -710,15 +721,14 @@ class GameSaveBackup(QMainWindow):
         # Create backup directory if it doesn't exist
         os.makedirs(self.config["backup_dir"], exist_ok=True)
         
+        if not os.path.exists(self.config_file):
+            self.show_first_run_dialog()
+            
         # Save the config with the default backup directory
         self.save_config()
         
         # Current game being added - to track the workflow steps
         self.current_game_addition = None
-        
-        # Check if this is first run
-        if not os.path.exists(self.config_file):
-            self.show_first_run_dialog()
         
         # Initialize ThreadPool for background tasks
         self.threadpool = QThreadPool.globalInstance()
@@ -728,14 +738,19 @@ class GameSaveBackup(QMainWindow):
     
     def show_first_run_dialog(self):
         """Show first-run dialog to ask about IGDB usage"""
-        reply = QMessageBox.question(
-            self,
-            "Welcome to Ambidex!",
-            "Would you like to enable IGDB integration to automatically fetch game covers and metadata?\n\n"
-            "This requires a free Twitch account and API key.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Welcome to Ambidex!")
+        
+        # Create larger welcome text
+        welcome_text = "<h2>Welcome to Ambidex!</h2>"
+        question_text = "Would you like to enable IGDB integration to automatically fetch game covers and metadata?\n\n" \
+                        "This requires a free Twitch account and API key."
+        
+        msg_box.setText(welcome_text + question_text)
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.Yes)
+        
+        reply = msg_box.exec()
         
         if reply == QMessageBox.Yes:
             self.show_api_setup()
@@ -824,7 +839,7 @@ class GameSaveBackup(QMainWindow):
             game_widget = self.create_game_widget(game_name, game_data)
             self.game_grid.addWidget(game_widget)
             
-    def backup_game(self, game_name, show_message=True):
+    def backup_game(self, game_name, show_message=True, label="", color=None):
         game_data = self.config["games"].get(game_name)
         if not game_data:
             return
@@ -833,8 +848,7 @@ class GameSaveBackup(QMainWindow):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Sanitize the game folder name to ensure it's a valid directory name
-        game_folder_name = game_name.replace(" ", "_").replace(":", "").replace("/", "_").replace("\\", "_")
-        game_folder_name = ''.join(c for c in game_folder_name if c.isalnum() or c in ['_', '-'])
+        game_folder_name = self.make_safe_filename(game_name)
         
         # Ensure backup_dir is absolute and normalized
         backup_base = os.path.abspath(os.path.normpath(self.config["backup_dir"]))
@@ -857,7 +871,6 @@ class GameSaveBackup(QMainWindow):
         
         # Now create the game-specific backup directory with timestamp
         try:
-            print(f"Creating directory: {backup_dir}")  # Debug output
             os.makedirs(backup_dir, exist_ok=True)
         except Exception as e:
             QMessageBox.critical(
@@ -917,7 +930,9 @@ class GameSaveBackup(QMainWindow):
             backup_info = {
                 "timestamp": timestamp,
                 "datetime": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "directory": backup_dir
+                "directory": backup_dir,
+                "label": label,
+                "color": color or "#FFFFFF"
             }
             
             self.config["games"][game_name]["backups"].append(backup_info)
@@ -970,127 +985,242 @@ class GameSaveBackup(QMainWindow):
         if not game_data:
             return
         
+        # Use custom delegate for color bars
+        if not hasattr(self, 'backup_delegate'):
+            self.backup_delegate = BackupItemDelegate()
+            self.backups_list.setItemDelegate(self.backup_delegate)
+        
         backups = sorted(game_data.get("backups", []), key=lambda x: x["timestamp"], reverse=True)
         
         for i, backup in enumerate(backups):
-            item = QListWidgetItem(f"{backup['datetime']}")
-            item.setData(Qt.UserRole, backup)
+            # Get label and handle empty values in older backups
+            backup_label = backup.get("label", "")
+            
+            # Create the display text with label if available
+            display_text = backup["datetime"]
+            if backup_label:
+                display_text += f" - {backup_label}"
             
             # Mark the latest backup
+            if i == 0:
+                display_text += " (Latest)"
+                
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.UserRole, backup)
+            
+            # No longer coloring the background here - the delegate handles color display
+            
+            # Make latest backup bold
             if i == 0:
                 font = item.font()
                 font.setBold(True)
                 item.setFont(font)
-                item.setText(f"{backup['datetime']} (Latest)")
             
             self.backups_list.addItem(item)
+        
+        # Enable context menu for backups list
+        self.backups_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.backups_list.customContextMenuRequested.connect(self.show_backup_context_menu)
     
     def show_backup_details(self, item):
         self.selected_backup = item.data(Qt.UserRole)
         self.restore_button.setEnabled(True)
     
-    def restore_backup(self):
-        if not hasattr(self, "selected_backup"):
+    def show_backup_context_menu(self, pos):
+        item = self.backups_list.itemAt(pos)
+        if not item:
             return
-        
-        # Get the game name from the selected item in the games list
+            
+        self.selected_backup = item.data(Qt.UserRole)
         game_name = self.games_list.currentItem().text()
         if not game_name:
             return
+            
+        context_menu = QMenu(self)
         
-        game_data = self.config["games"].get(game_name)
-        if not game_data:
+        # Restore action
+        restore_action = context_menu.addAction("Restore This Backup")
+        
+        # Labels submenu
+        text_label_menu = QMenu("Set Text Label", self)
+        context_menu.addMenu(text_label_menu)
+        
+        edit_text_action = text_label_menu.addAction("Edit Text Label...")
+        clear_text_action = text_label_menu.addAction("Clear Text Label")
+        
+        # Colors submenu
+        color_menu = QMenu("Set Color Tag", self)
+        context_menu.addMenu(color_menu)
+        
+        # Color options
+        color_actions = []
+        colors = [
+            ("#FFFFFF", "Default"),
+            ("#4CAF50", "Green"), 
+            ("#2196F3", "Blue"), 
+            ("#FFC107", "Yellow"), 
+            ("#FF5722", "Orange"), 
+            ("#E91E63", "Pink"),
+            ("#9C27B0", "Purple"),
+            ("#607D8B", "Gray")
+        ]
+        
+        for color_hex, color_name in colors:
+            action = color_menu.addAction(color_name)
+            # Create a color icon
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(QColor(color_hex))
+            action.setIcon(QIcon(pixmap))
+            action.setData(color_hex)
+            color_actions.append(action)
+        
+        # Delete action with separator
+        context_menu.addSeparator()
+        delete_action = context_menu.addAction("Delete This Backup")
+        delete_action.setIcon(QIcon.fromTheme("edit-delete"))
+        
+        # Show context menu and handle actions
+        action = context_menu.exec(self.backups_list.mapToGlobal(pos))
+        
+        if action == restore_action:
+            self.restore_backup()
+        elif action == edit_text_action:
+            self.edit_backup_text_label(game_name)
+        elif action == clear_text_action:
+            self.clear_backup_label(game_name)
+        elif action == delete_action:
+            self.delete_backup(game_name)
+        elif action in color_actions:
+            color_hex = action.data()
+            self.set_backup_color(game_name, color_hex)
+    
+    def edit_backup_text_label(self, game_name):
+        """Edit the text label for a backup"""
+        current_label = self.selected_backup.get("label", "")
+        
+        new_label, ok = QInputDialog.getText(
+            self, "Edit Label", "Enter a label for this backup:", 
+            QLineEdit.Normal, current_label
+        )
+        
+        if not ok:
             return
+            
+        # Update the backup data
+        self.selected_backup["label"] = new_label
         
-        # Confirm the restore action
+        # Find and update the backup in the config
+        self.update_backup_in_config(game_name, {"label": new_label})
+    
+    def clear_backup_label(self, game_name):
+        """Clear the text label for a backup"""
+        # Update the backup data
+        self.selected_backup["label"] = ""
+        
+        # Find and update the backup in the config
+        self.update_backup_in_config(game_name, {"label": ""})
+    
+    def set_backup_color(self, game_name, color_hex):
+        """Set the color tag for a backup"""
+        # Update the backup data
+        self.selected_backup["color"] = color_hex
+        
+        # Find and update the backup in the config
+        self.update_backup_in_config(game_name, {"color": color_hex})
+    
+    def delete_backup(self, game_name):
+        """Delete a backup"""
+        # Confirm deletion
         confirm = QMessageBox.question(
-            self, 
-            "Confirm Restore", 
-            f"This will first backup your current saves and then restore the selected backup from {self.selected_backup['datetime']}.\n\nDo you want to continue?",
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete this backup from {self.selected_backup['datetime']}?\n\nThis action cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         
         if confirm != QMessageBox.Yes:
             return
-        
-        # First backup the current saves
-        self.backup_game(game_name)
-        
-        # Now restore from the selected backup
+            
+        # Get the backup directory to delete
         backup_dir = self.selected_backup["directory"]
-        parent_dir = game_data.get("parent_dir", "")
+        timestamp = self.selected_backup["timestamp"]
         
-        # Check if parent_dir.txt exists in the backup
-        parent_dir_file = os.path.join(backup_dir, "parent_dir.txt")
-        if os.path.exists(parent_dir_file):
-            with open(parent_dir_file, 'r') as f:
-                backup_parent_dir = f.read().strip()
-            # Use backup parent dir if it exists and original doesn't
-            if backup_parent_dir and not parent_dir:
-                parent_dir = backup_parent_dir
-        
-        for save_path in game_data["save_paths"]:
+        # Remove from config
+        game_data = self.config["games"].get(game_name)
+        if game_data:
+            # Find the backup in the list and remove it
+            for i, backup in enumerate(game_data["backups"]):
+                if backup["timestamp"] == timestamp:
+                    del game_data["backups"][i]
+                    break
+                    
+            self.save_config()
+            
+            # Try to delete the backup folder
             try:
-                # Determine source based on directory structure
-                if parent_dir and save_path.startswith(parent_dir):
-                    rel_path = os.path.relpath(save_path, parent_dir)
-                    src = os.path.join(backup_dir, rel_path)
-                else:
-                    base_name = os.path.basename(save_path)
-                    src = os.path.join(backup_dir, base_name)
-                
-                # If source doesn't exist in expected location, try direct backup dir
-                if not os.path.exists(src):
-                    if os.path.isdir(save_path):
-                        # Try to find a directory with matching name
-                        for item in os.listdir(backup_dir):
-                            if item == os.path.basename(save_path) and os.path.isdir(os.path.join(backup_dir, item)):
-                                src = os.path.join(backup_dir, item)
-                                break
-                    else:
-                        # Try to find a file with matching name
-                        for item in os.listdir(backup_dir):
-                            if item == os.path.basename(save_path) and not os.path.isdir(os.path.join(backup_dir, item)):
-                                src = os.path.join(backup_dir, item)
-                                break
-                
-                # Restore the file/directory
-                if os.path.exists(src):
-                    if os.path.isdir(src):
-                        if os.path.exists(save_path):
-                            shutil.rmtree(save_path)
-                        shutil.copytree(src, save_path)
-                    else:
-                        shutil.copy2(src, save_path)
-                else:
-                    QMessageBox.warning(self, "Restore Error", 
-                                      f"Could not find {os.path.basename(save_path)} in the backup.")
+                if os.path.exists(backup_dir):
+                    shutil.rmtree(backup_dir)
             except Exception as e:
-                QMessageBox.warning(self, "Restore Error", f"Error restoring {save_path}: {e}")
-        
-        QMessageBox.information(self, "Restore Complete", f"Save files for {game_name} have been restored successfully!")
+                QMessageBox.warning(self, "Error", f"Could not delete backup directory: {e}")
+            
+            # Refresh the list
+            self.show_game_backups(self.games_list.currentItem())
+    
+    def update_backup_in_config(self, game_name, update_data):
+        """Update a backup entry in the config with new data"""
+        timestamp = self.selected_backup["timestamp"]
+        game_data = self.config["games"].get(game_name)
+        if game_data:
+            for backup in game_data["backups"]:
+                if backup["timestamp"] == timestamp:
+                    backup.update(update_data)
+                    break
+                    
+            self.save_config()
+            
+            # Refresh the list to show the updated label/color
+            self.show_game_backups(self.games_list.currentItem())
 
     def setup_restore_tab(self):
         layout = QVBoxLayout(self.restore_tab)
         
+        # Split into left and right sections
+        main_layout = QHBoxLayout()
+        
+        # Left side - Game selection
+        left_layout = QVBoxLayout()
+        
         # Game selection list
+        left_layout.addWidget(QLabel("Games with backups:"))
         self.games_list = QListWidget()
         self.games_list.itemClicked.connect(self.show_game_backups)
-        layout.addWidget(QLabel("Select a game:"))
-        layout.addWidget(self.games_list)
+        left_layout.addWidget(self.games_list)
+        
+        # Add to main layout
+        main_layout.addLayout(left_layout, 1)
+        
+        # Right side - Backup management
+        right_layout = QVBoxLayout()
         
         # Backup selection list
+        right_layout.addWidget(QLabel("Available backups: (Right-click for options)"))
         self.backups_list = QListWidget()
         self.backups_list.itemClicked.connect(self.show_backup_details)
-        layout.addWidget(QLabel("Available backups:"))
-        layout.addWidget(self.backups_list)
+        self.backups_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        right_layout.addWidget(self.backups_list)
         
         # Restore button
         self.restore_button = QPushButton("Restore Selected Backup")
         self.restore_button.clicked.connect(self.restore_backup)
         self.restore_button.setEnabled(False)
-        layout.addWidget(self.restore_button)
+        right_layout.addWidget(self.restore_button)
+        
+        # Add to main layout
+        main_layout.addLayout(right_layout, 2)  # Give more space to the right side
+        
+        # Add the main layout to the tab
+        layout.addLayout(main_layout)
         
         # Update games list
         self.update_games_list()
@@ -1161,7 +1291,7 @@ class GameSaveBackup(QMainWindow):
         name_label = QLabel(game_name)
 
         # Light mode and win10 exception
-        if QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark or (platform.release() != "10" or int(platform.version().split('.')[2]) < 22000):
+        if QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark or (platform.release() != "11" or int(platform.version().split('.')[2]) < 22000):
             name_label_col = "303030"
         else:
             name_label_col = "e0e0e0"
@@ -1259,15 +1389,19 @@ class GameSaveBackup(QMainWindow):
         
         if not selected_paths:
             return
+        
+        # Generate name suggestions from paths
+        suggestions = self.generate_game_name_suggestions(selected_paths)
+        
+        # Show game name dialog with suggestions
+        name_dialog = GameNameSuggestionDialog(self, suggestions)
+        if name_dialog.exec() != QDialog.Accepted:
+            return
             
-        # Get game name from user
-        game_name, ok = QInputDialog.getText(
-            self, "Game Title", "Enter the game's title:"
-        )
-        
-        if not ok or not game_name:
-            return  # User cancelled the game name dialog
-        
+        game_name = name_dialog.selected_name
+        if not game_name:
+            return
+            
         # Determine common parent directory for all selected items
         if len(selected_paths) == 1:
             if os.path.isdir(selected_paths[0]):
@@ -1315,7 +1449,48 @@ class GameSaveBackup(QMainWindow):
         # Update UI
         self.load_games()
         self.update_games_list()
-    
+        
+    def generate_game_name_suggestions(self, paths):
+        """Generate game name suggestions based on selected paths"""
+        suggestions = set()
+        
+        for path in paths:
+            # Add folder name as suggestion
+            if os.path.isdir(path):
+                folder_name = os.path.basename(path)
+                # Convert underscores to spaces and title case
+                suggestions.add(folder_name.replace('_', ' ').title())
+                
+                # Also check subfolders (1 level deep) for game-related names
+                try:
+                    for subfolder in os.listdir(path):
+                        subfolder_path = os.path.join(path, subfolder)
+                        if os.path.isdir(subfolder_path):
+                            suggestions.add(subfolder.replace('_', ' ').title())
+                except (PermissionError, FileNotFoundError):
+                    pass
+            else:
+                # Add parent folder name as suggestion
+                parent_folder = os.path.basename(os.path.dirname(path))
+                if parent_folder:
+                    suggestions.add(parent_folder.replace('_', ' ').title())
+                
+                # Add filename without extension as suggestion
+                file_name = os.path.splitext(os.path.basename(path))[0]
+                if file_name and len(file_name) > 3:  # Avoid very short names
+                    suggestions.add(file_name.replace('_', ' ').title())
+        
+        # Clean up suggestions
+        cleaned_suggestions = []
+        for suggestion in suggestions:
+            # Remove common folder name patterns that are unlikely to be game names
+            if suggestion.lower() not in ['saves', 'saved games', 'savedata', 'save games', 'savegames', 'save files']:
+                # Remove file extensions if they slipped through
+                if not suggestion.lower().endswith(('.sav', '.dat', '.bin', '.json', '.xml')):
+                    cleaned_suggestions.append(suggestion)
+        
+        return cleaned_suggestions
+
     def fetch_game_metadata(self, game_name, is_new_game=False):
         # Check if IGDB API is configured properly
         if not self.config.get("igdb_auth"):
@@ -1333,14 +1508,14 @@ class GameSaveBackup(QMainWindow):
             if is_new_game:
                 self.download_game_cover(search_dialog.selected_game, is_new_game=True)
             else:
-                self.download_game_cover(search_dialog.selected_game)
+                self.download_game_cover(search_dialog.selected_game, game_name=game_name)
         else:
             # User cancelled the search dialog
             if is_new_game and self.current_game_addition:
                 # Finalize with placeholder
                 self.finalize_game_addition(None, None)
     
-    def download_game_cover(self, game_data, is_new_game=False):
+    def download_game_cover(self, game_data, is_new_game=False, game_name=None):
         # Create images directory if it doesn't exist
         images_dir = os.path.join(self.app_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
@@ -1352,7 +1527,10 @@ class GameSaveBackup(QMainWindow):
             worker.signals.image_downloaded.connect(lambda name, path, official_name: 
                                         self.finalize_game_addition(path, official_name))
         else:
-            worker.signals.image_downloaded.connect(self.on_image_downloaded)
+            # Pass the original game name to ensure we update the right entry
+            original_game_name = game_name if game_name else game_data["name"]
+            worker.signals.image_downloaded.connect(lambda name, path, official_name: 
+                                        self.on_image_downloaded(original_game_name, path, official_name))
         
         worker.signals.search_failed.connect(lambda msg: 
                                 self.handle_image_download_failure(msg, is_new_game))
@@ -1379,15 +1557,21 @@ class GameSaveBackup(QMainWindow):
                     thumb_data = self.current_game_data["thumb_data"]
                     self.config["games"][game_name]["thumb_data"] = base64.b64encode(thumb_data).decode('utf-8')
             
-            # Update to official name if available and different
+            # Rename the game if official name is different (for both new and existing games)
             if official_name and official_name != game_name:
-                # Create new entry with official name
-                self.config["games"][official_name] = self.config["games"][game_name].copy()
-                # Delete old entry
-                del self.config["games"][game_name]
+                # Check if the official name already exists in config
+                if official_name not in self.config["games"]:
+                    # Create new entry with official name
+                    self.config["games"][official_name] = self.config["games"][game_name].copy()
+                    # Delete old entry
+                    del self.config["games"][game_name]
+                    # Show rename message
+                    QMessageBox.information(self, "Game Renamed", 
+                                          f"Game has been renamed from '{game_name}' to '{official_name}'.")
             
             self.save_config()
             self.load_games()  # Refresh the UI to show the image
+            self.update_games_list()  # Update the list of games in the restore tab
             
             # Notify user
             QMessageBox.information(self, "Image Downloaded", 
@@ -1557,7 +1741,7 @@ class GameSaveBackup(QMainWindow):
             return
         
         # Create the game's backup directory path
-        game_folder_name = game_name.replace(" ", "_").replace(":", "").replace("/", "_")
+        game_folder_name = self.make_safe_filename(game_name)
         backup_dir = os.path.join(self.config["backup_dir"], game_folder_name)
         
         # Check if directory exists
@@ -1610,7 +1794,275 @@ class GameSaveBackup(QMainWindow):
             self.load_games()
             self.update_games_list()
             QMessageBox.information(self, "Game Deleted", f"'{game_name}' has been removed.")
+    
+    def make_safe_filename(self, name):
+        """Create a safe filename/foldername from a game name"""
+        safe_name = name.lower().replace(" ", "_")
+        # Replace various special characters
+        for char in [':', '/', '\\', '*', '?', '"', '<', '>', '|', '.']:
+            safe_name = safe_name.replace(char, "_")
+        # Keep only alphanumeric and certain safe characters
+        safe_name = ''.join(c for c in safe_name if c.isalnum() or c in ['_', '-'])
+        return safe_name
+
+    def restore_backup(self):
+        if not hasattr(self, "selected_backup"):
+            return
+        
+        # Get the game name from the selected item in the games list
+        game_name = self.games_list.currentItem().text()
+        if not game_name:
+            return
+        
+        game_data = self.config["games"].get(game_name)
+        if not game_data:
+            return
+        
+        # Confirm the restore action
+        confirm = QMessageBox.question(
+            self, 
+            "Confirm Restore", 
+            f"This will first backup your current saves and then restore the selected backup from {self.selected_backup['datetime']}.\n\nDo you want to continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if confirm != QMessageBox.Yes:
+            return
+        
+        # First backup the current saves
+        self.backup_game(game_name)
+        
+        # Now restore from the selected backup
+        backup_dir = self.selected_backup["directory"]
+        parent_dir = game_data.get("parent_dir", "")
+        
+        # Check if parent_dir.txt exists in the backup
+        parent_dir_file = os.path.join(backup_dir, "parent_dir.txt")
+        if os.path.exists(parent_dir_file):
+            with open(parent_dir_file, 'r') as f:
+                backup_parent_dir = f.read().strip()
+            # Use backup parent dir if it exists and original doesn't
+            if backup_parent_dir and not parent_dir:
+                parent_dir = backup_parent_dir
+        
+        for save_path in game_data["save_paths"]:
+            try:
+                # Determine source based on directory structure
+                if parent_dir and save_path.startswith(parent_dir):
+                    rel_path = os.path.relpath(save_path, parent_dir)
+                    src = os.path.join(backup_dir, rel_path)
+                else:
+                    base_name = os.path.basename(save_path)
+                    src = os.path.join(backup_dir, base_name)
+                
+                # If source doesn't exist in expected location, try direct backup dir
+                if not os.path.exists(src):
+                    if os.path.isdir(save_path):
+                        # Try to find a directory with matching name
+                        for item in os.listdir(backup_dir):
+                            if item == os.path.basename(save_path) and os.path.isdir(os.path.join(backup_dir, item)):
+                                src = os.path.join(backup_dir, item)
+                                break
+                    else:
+                        # Try to find a file with matching name
+                        for item in os.listdir(backup_dir):
+                            if item == os.path.basename(save_path) and not os.path.isdir(os.path.join(backup_dir, item)):
+                                src = os.path.join(backup_dir, item)
+                                break
+                
+                # Restore the file/directory
+                if os.path.exists(src):
+                    if os.path.isdir(src):
+                        if os.path.exists(save_path):
+                            shutil.rmtree(save_path)
+                        shutil.copytree(src, save_path)
+                    else:
+                        shutil.copy2(src, save_path)
+                else:
+                    QMessageBox.warning(self, "Restore Error", 
+                                      f"Could not find {os.path.basename(save_path)} in the backup.")
+            except Exception as e:
+                QMessageBox.warning(self, "Restore Error", f"Error restoring {save_path}: {e}")
+        
+        QMessageBox.information(self, "Restore Complete", f"Save files for {game_name} have been restored successfully!")
+
+
+class BackupLabelDialog(QDialog):
+    """Dialog for adding or editing labels and color tags for save backups"""
+    def __init__(self, parent=None, current_label="", current_color=None):
+        super().__init__(parent)
+        self.setWindowTitle("Save Backup Label")
+        self.resize(400, 200)
+        
+        self.selected_label = current_label
+        self.selected_color = current_color or QColor("#FFFFFF")
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Label input
+        form = QFormLayout()
+        self.label_input = QLineEdit()
+        self.label_input.setText(self.selected_label)
+        self.label_input.setPlaceholderText("Enter a descriptive label for this save")
+        form.addRow("Label:", self.label_input)
+        layout.addLayout(form)
+        
+        # Color selection
+        color_layout = QHBoxLayout()
+        
+        # Color preview
+        self.color_preview = QFrame()
+        self.color_preview.setFixedSize(40, 40)
+        self.color_preview.setStyleSheet(f"background-color: {self.selected_color.name()}; border: 1px solid #888;")
+        color_layout.addWidget(self.color_preview)
+        
+        # Color button
+        color_button = QPushButton("Select Color")
+        color_button.clicked.connect(self.select_color)
+        color_layout.addWidget(color_button)
+        
+        # Preset colors
+        presets_layout = QHBoxLayout()
+        presets = [
+            ("#4CAF50", "Green"), 
+            ("#2196F3", "Blue"), 
+            ("#FFC107", "Yellow"), 
+            ("#FF5722", "Orange"), 
+            ("#E91E63", "Pink"),
+            ("#9C27B0", "Purple"),
+            ("#607D8B", "Gray"),
+            ("#FFFFFF", "White")
+        ]
+        
+        for color_hex, color_name in presets:
+            preset_btn = QPushButton()
+            preset_btn.setFixedSize(30, 30)
+            preset_btn.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #888;")
+            preset_btn.setToolTip(color_name)
+            preset_btn.clicked.connect(lambda checked=False, hex=color_hex: self.use_preset_color(hex))
+            presets_layout.addWidget(preset_btn)
+        
+        layout.addLayout(color_layout)
+        layout.addLayout(presets_layout)
+        
+        # Buttons
+        buttons_layout = QHBoxLayout()
+        
+        save_button = QPushButton("Save")
+        save_button.clicked.connect(self.accept)
+        buttons_layout.addWidget(save_button)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel_button)
+        
+        layout.addLayout(buttons_layout)
+        
+    def select_color(self):
+        color = QColorDialog.getColor(self.selected_color, self, "Choose Color Tag")
+        if color.isValid():
+            self.selected_color = color
+            self.color_preview.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #888;")
+    
+    def use_preset_color(self, color_hex):
+        self.selected_color = QColor(color_hex)
+        self.color_preview.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #888;")
+    
+    def get_values(self):
+        return self.label_input.text(), self.selected_color.name()
+
+
+class GameNameSuggestionDialog(QDialog):
+    """Dialog for suggesting game names based on file paths"""
+    def __init__(self, parent=None, suggestions=None):
+        super().__init__(parent)
+        self.setWindowTitle("Game Title")
+        self.resize(400, 300)
+        
+        self.suggestions = suggestions or []
+        self.selected_name = ""
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Manual entry
+        form = QFormLayout()
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Enter the game's title")
+        form.addRow("Game Title:", self.name_input)
+        layout.addLayout(form)
+        
+        # Suggestions label
+        if self.suggestions:
+            layout.addWidget(QLabel("Or select from these suggestions:"))
             
+            # Suggestions list
+            self.suggestions_list = QListWidget()
+            for suggestion in self.suggestions:
+                self.suggestions_list.addItem(suggestion)
+            self.suggestions_list.itemClicked.connect(self.on_suggestion_clicked)
+            layout.addWidget(self.suggestions_list)
+        else:
+            layout.addWidget(QLabel("No suggestions found based on file paths."))
+        
+        # Buttons
+        buttons_layout = QHBoxLayout()
+        
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept_name)
+        buttons_layout.addWidget(ok_button)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        buttons_layout.addWidget(cancel_button)
+        
+        layout.addLayout(buttons_layout)
+    
+    def on_suggestion_clicked(self, item):
+        self.name_input.setText(item.text())
+    
+    def accept_name(self):
+        self.selected_name = self.name_input.text()
+        if self.selected_name:
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Missing Title", "Please enter or select a game title.")
+
+
+class BackupItemDelegate(QStyledItemDelegate):
+    """Custom delegate for backup items to show color bar on left side"""
+    def paint(self, painter, option, index):
+        # Get backup data
+        backup = index.data(Qt.UserRole)
+        if not backup:
+            return super().paint(painter, option, index)
+        
+        # Get color from backup
+        color_hex = backup.get("color", "#FFFFFF")
+        
+        # Call the base class implementation first to draw the item background
+        super().paint(painter, option, index)
+        
+        # Only if we have a non-default color, draw the color bar
+        if color_hex and color_hex != "#FFFFFF":
+            # Save painter state
+            painter.save()
+            
+            # Draw the color bar on the left
+            color_bar_width = 2
+            color_rect = QRect(option.rect)
+            color_rect.setWidth(color_bar_width)
+            painter.fillRect(color_rect, QColor(color_hex))
+            
+            # Restore painter state
+            painter.restore()
+
 
 def main():
     app = QApplication(sys.argv)
