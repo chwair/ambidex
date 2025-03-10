@@ -32,7 +32,7 @@ jobs:
         
     - name: Copy icon
       run: |
-        copy icon.ico build\\icon.ico
+        copy icon.ico build\\ambidex.dist\\icon.ico
       
     - name: Upload built application
       uses: actions/upload-artifact@v4
