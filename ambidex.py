@@ -4,6 +4,7 @@ import json
 import datetime
 import shutil
 import time
+import platform
 import urllib.parse
 import subprocess
 from pathlib import Path
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QHBoxLayout, QFormLayout, QLayout, QSizePolicy,
     QMenu
 )
-from PySide6.QtGui import QPixmap, QIcon, QCursor, QAction, QDrag, QPainter, QColor
+from PySide6.QtGui import QPixmap, QIcon, QCursor, QAction, QDrag, QPainter, QColor, QStyleHints
 from PySide6.QtCore import Qt, QSize, Signal, QObject, QThread, QMetaObject, Slot, QRunnable, QThreadPool, QPoint, QRect, QMimeData
 import requests
 import threading
@@ -1157,9 +1158,15 @@ class GameSaveBackup(QMainWindow):
         image_layout.addWidget(image_label, 0, Qt.AlignCenter)
         layout.addWidget(image_container, 0, Qt.AlignCenter)
         
-        # Game name label with proper padding and no extra space
         name_label = QLabel(game_name)
-        name_label.setStyleSheet("border: none; color: #e0e0e0; padding: 4px 0;")
+
+        # Light mode and win10 exception
+        if QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark or (platform.release() != "10" or int(platform.version().split('.')[2]) < 22000):
+            name_label_col = "303030"
+        else:
+            name_label_col = "e0e0e0"
+        name_label.setStyleSheet(f"border: none; color: #{name_label_col}; padding: 4px 0;")
+
         name_label.setAlignment(Qt.AlignCenter)
         name_label.setWordWrap(True)
         layout.addWidget(name_label)
