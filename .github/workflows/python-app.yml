@@ -28,7 +28,7 @@ jobs:
         
     - name: Build with Nuitka
       run: |
-        python -m nuitka --standalone --windows-icon-from-ico=icon.ico --enable-plugin=pyside6 --windows-disable-console --assume-yes-for-downloads --show-progress --output-dir=build ambidex.py
+        python -m nuitka --standalone --windows-icon-from-ico=icon.ico --enable-plugin=pyside6 --windows-disable-console --assume-yes-for-downloads --clang --show-progress --output-dir=build ambidex.py
         
     - name: Copy icon
       run: |
