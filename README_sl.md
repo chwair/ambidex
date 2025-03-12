@@ -11,10 +11,10 @@
 - Qt6 uporabniški vmesnik
 - Integracija z IGDB za pridobivanje podatkov o igrah
 - Mrežni pogled dodanih iger
+- Označevanje shranjenih kopij z barvo in/ali besedilom
 
-## Gradnja
-Namesti vse v requirements.txt ter začni gradnjo z build.py.
-
+## Grajenje
+Namesti Nuitka, Visual Studio Build Tools z Clang-om in vse v requirements.txt, nato zgradi s skripto build.py.
 
 ## License
 MIT
