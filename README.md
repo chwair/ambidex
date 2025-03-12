@@ -11,9 +11,10 @@
 - Qt6 user interface
 - IGDB integration for fetching game metadata
 - Grid-like view for imported games
+- Color and text labeling of backups
 
 ## Building
-Make sure to install everything in requirements.txt, then build by running build.py.
+Make sure to install Nuitka, Visual Studio Build Tools with Clang and everything in requirements.txt, then build by running build.py.
 
 
 ## License
