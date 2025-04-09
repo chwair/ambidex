@@ -1,0 +1,27 @@
+{
+    "backup_dir": "D:\\Documents\\save backup\\backups",
+    "games": {
+        "Hacknet": {
+            "save_paths": [
+                "D:/Documents/My Games/Hacknet"
+            ],
+            "backups": [
+                {
+                    "timestamp": "20250309_142648",
+                    "datetime": "2025-03-09 14:26:49",
+                    "directory": "D:\\Documents\\save backup\\backups\\Hacknet\\20250309_142648"
+                }
+            ],
+            "image": "D:\\Documents\\save backup\\images\\hacknet.jpg",
+            "thumb_data": null,
+            "parent_dir": "D:/Documents/My Games/Hacknet"
+        }
+    },
+    "igdb_client_id": "n0s1059qb6wxykkj4j3q88qr66fppp",
+    "igdb_client_secret": "xf635tr5ldmt3pvobv2o1sgqwyj6d9",
+    "igdb_auth": {
+        "access_token": "lfew8br9dgda93gzk9cxav568ubvof",
+        "client_id": "n0s1059qb6wxykkj4j3q88qr66fppp",
+        "expires_at": 1746949740.8600163
+    }
+}
