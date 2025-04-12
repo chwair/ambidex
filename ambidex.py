@@ -18,11 +18,20 @@ from PySide6.QtCore import Qt, QThreadPool
 from ui import (
     IGDBSetupDialog, GameSearchDialog, SaveSelectionDialog,
     FlowLayout, DraggableWidget, BackupLabelDialog, GameNameSuggestionDialog, 
-    BackupItemDelegate
+    BackupItemDelegate, LoadingDialog
 )
 from workers import IGDBAuthWorker, IGDBGameSearchWorker, IGDBImageDownloadWorker
 import utils
 
+
+class logger:
+    @staticmethod
+    def info(message):
+        print(f"[INFO] {message}")
+    
+    @staticmethod
+    def error(message):
+        print(f"[ERROR] {message}")
 
 class GameSaveBackup(QMainWindow):
     def __init__(self):
@@ -53,9 +62,9 @@ class GameSaveBackup(QMainWindow):
         self.threadpool = QThreadPool.globalInstance()
         
         self.init_ui()
+        
     
     def show_first_run_dialog(self):
-        """show dialog to ask about igdb usage"""
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Welcome to Ambidex!")
         
@@ -235,7 +244,6 @@ class GameSaveBackup(QMainWindow):
                 print(f"Warning: Could not clean up partial backup: {e}")
     
     def backup_all_games(self):
-        """backup all games in the collection"""
         if not self.config["games"]:
             QMessageBox.information(self, "No Games", "No games to backup.")
             return
@@ -364,7 +372,6 @@ class GameSaveBackup(QMainWindow):
             self.set_backup_color(game_name, color_hex)
     
     def edit_backup_text_label(self, game_name):
-        """Edit the text label for a backup"""
         current_label = self.selected_backup.get("label", "")
         
         new_label, ok = QInputDialog.getText(
@@ -380,19 +387,16 @@ class GameSaveBackup(QMainWindow):
         self.update_backup_in_config(game_name, {"label": new_label})
     
     def clear_backup_label(self, game_name):
-        """Clear the text label for a backup"""
         self.selected_backup["label"] = ""
         
         self.update_backup_in_config(game_name, {"label": ""})
     
     def set_backup_color(self, game_name, color_hex):
-        """Set the color tag for a backup"""
         self.selected_backup["color"] = color_hex
         
         self.update_backup_in_config(game_name, {"color": color_hex})
     
     def delete_backup(self, game_name):
-        """Delete a backup"""
         confirm = QMessageBox.question(
             self,
             "Confirm Deletion",
@@ -425,7 +429,6 @@ class GameSaveBackup(QMainWindow):
             self.show_game_backups(self.games_list.currentItem())
     
     def update_backup_in_config(self, game_name, update_data):
-        """Update a backup entry in the config with new data"""
         timestamp = self.selected_backup["timestamp"]
         game_data = self.config["games"].get(game_name)
         if game_data:
@@ -554,7 +557,6 @@ class GameSaveBackup(QMainWindow):
         return widget
 
     def on_game_moved(self, source_name, target_name):
-        """Handle game reordering"""
         if source_name == target_name:
             return
             
@@ -578,7 +580,47 @@ class GameSaveBackup(QMainWindow):
     def add_game_save(self):
         self.current_game_addition = None
         
-        dialog = SaveSelectionDialog(self)
+        name_dialog = GameNameSuggestionDialog(self)
+        if name_dialog.exec() != QDialog.Accepted:
+            return
+                
+        game_name = name_dialog.selected_name
+        if not game_name:
+            return
+        
+        official_name = game_name
+        igdb_game_data = None
+        
+        loading_dialog = LoadingDialog(self, f"Searching for data for '{game_name}'")
+        loading_dialog.center_on_parent()
+        loading_dialog.show()
+        QApplication.processEvents()
+        
+        if self.config.get("igdb_auth"):
+            search_dialog = GameSearchDialog(self, self.config["igdb_auth"], game_name)
+            loading_dialog.close()
+            if search_dialog.exec() == QDialog.Accepted and search_dialog.selected_game:
+                igdb_game_data = search_dialog.selected_game
+                official_name = igdb_game_data["name"]
+                game_name = official_name
+                
+                loading_dialog = LoadingDialog(self, f"Fetching save locations for '{game_name}'")
+                loading_dialog.center_on_parent()
+                loading_dialog.show()
+            else:
+                return
+        
+        try:
+            loading_dialog.set_detail("Checking PCGamingWiki for save locations...")
+            QApplication.processEvents()
+            suggested_paths = utils.fetch_pcgamingwiki_save_locations(game_name)
+        except Exception as e:
+            logger.error(f"Error fetching PCGamingWiki data: {e}")
+            suggested_paths = {}
+        finally:
+            loading_dialog.close()
+        
+        dialog = SaveSelectionDialog(self, game_name, self.config.get("igdb_auth"), suggested_paths)
         if dialog.exec() != QDialog.Accepted:
             return
         
@@ -587,16 +629,6 @@ class GameSaveBackup(QMainWindow):
         if not selected_paths:
             return
         
-        suggestions = utils.generate_game_name_suggestions(selected_paths)
-        
-        name_dialog = GameNameSuggestionDialog(self, suggestions)
-        if name_dialog.exec() != QDialog.Accepted:
-            return
-            
-        game_name = name_dialog.selected_name
-        if not game_name:
-            return
-            
         if len(selected_paths) == 1:
             if os.path.isdir(selected_paths[0]):
                 save_parent_dir = selected_paths[0]
@@ -628,7 +660,10 @@ class GameSaveBackup(QMainWindow):
         
         self.save_config()
         
-        if self.config.get("igdb_auth"):
+        if igdb_game_data:
+            self.current_game_data = igdb_game_data
+            self.download_game_cover(igdb_game_data, is_new_game=True)
+        elif self.config.get("igdb_auth"):
             self.fetch_game_metadata(game_name, is_new_game=True)
         else:
             self.finalize_game_addition(None, None)
@@ -702,7 +737,6 @@ class GameSaveBackup(QMainWindow):
                                 f"Cover image for '{official_name or game_name}' has been downloaded.")
     
     def finalize_game_addition(self, image_path, official_name):
-        """Complete the game addition process after metadata and image are retrieved"""
         if not self.current_game_addition:
             return
         
@@ -753,7 +787,6 @@ class GameSaveBackup(QMainWindow):
                     self.update_all_game_metadata()
     
     def update_all_game_metadata(self):
-        """Update metadata for all games in the collection"""
         for game_name in list(self.config["games"].keys()):
             self.fetch_game_metadata(game_name)
             
@@ -767,7 +800,25 @@ class GameSaveBackup(QMainWindow):
         rename_action = context_menu.addAction("Rename Game")
         edit_paths_action = context_menu.addAction("Edit Save Paths")
         fetch_metadata_action = context_menu.addAction("Fetch Metadata")
-        open_backup_action = context_menu.addAction("Open Backup Directory")
+        
+        open_menu = QMenu("Open Location", self)
+        context_menu.addMenu(open_menu)
+        
+        open_backup_action = open_menu.addAction("Open Backup Directory")
+        
+        game_data = self.config["games"].get(game_name)
+        save_path_actions = []
+        
+        if game_data and "save_paths" in game_data:
+            for i, path in enumerate(game_data["save_paths"]):
+                display_path = path
+                if len(display_path) > 40:
+                    display_path = "..." + display_path[-40:]
+                    
+                action = open_menu.addAction(f"Open Save Path: {display_path}")
+                action.setData(path)
+                save_path_actions.append(action)
+        
         delete_action = context_menu.addAction("Delete Game")
         
         action = context_menu.exec(widget.mapToGlobal(pos))
@@ -780,9 +831,36 @@ class GameSaveBackup(QMainWindow):
             self.fetch_game_metadata(game_name)
         elif action == open_backup_action:
             self.open_backup_directory(game_name)
+        elif action in save_path_actions:
+            path = action.data()
+            self.open_save_path(path)
         elif action == delete_action:
             self.delete_game(game_name)
-            
+
+    def open_save_path(self, path):
+        if not path or not os.path.exists(path):
+            QMessageBox.warning(self, "Path Not Found", f"The path does not exist:\n{path}")
+            return
+        
+        try:
+            if os.path.isdir(path):
+                if sys.platform == 'win32':
+                    os.startfile(os.path.normpath(path))
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', path], check=True)
+                else:
+                    subprocess.run(['xdg-open', path], check=True)
+            else:
+                parent_dir = os.path.dirname(path)
+                if sys.platform == 'win32':
+                    subprocess.run(['explorer', '/select,', os.path.normpath(path)], check=True)
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', parent_dir], check=True)
+                else:
+                    subprocess.run(['xdg-open', parent_dir], check=True)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open path: {e}")
+
     def rename_game(self, game_name):
         from PySide6.QtWidgets import QInputDialog
         
@@ -811,7 +889,17 @@ class GameSaveBackup(QMainWindow):
         if not game_data:
             return
         
-        dialog = SaveSelectionDialog(self)
+        logger.info(f"Editing paths for: {game_name}")
+        
+        try:
+            logger.info(f"Fetching PCGamingWiki data for: {game_name}")
+            suggested_paths = utils.fetch_pcgamingwiki_save_locations(game_name)
+            logger.info(f"PCGamingWiki returned {len(suggested_paths)} suggested paths")
+        except Exception as e:
+            logger.error(f"Error fetching PCGamingWiki data: {e}")
+            suggested_paths = {}
+        
+        dialog = SaveSelectionDialog(self, game_name, self.config.get("igdb_auth"), suggested_paths)
         if dialog.exec() != QDialog.Accepted:
             return
         

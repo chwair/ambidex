@@ -11,7 +11,7 @@ from PySide6.QtCore import (
     Qt, QSize, Signal, QMimeData, QRect, QPoint, QThreadPool
 )
 from PySide6.QtGui import (
-    QPixmap, QIcon, QDrag, QPainter, QColor, QCursor
+    QPixmap, QIcon, QDrag, QPainter, QColor, QCursor, QTextDocument
 )
 from workers import IGDBAuthWorker, IGDBGameSearchWorker, APITestWorker
 import utils
@@ -125,7 +125,7 @@ class GameSearchDialog(QDialog):
     def __init__(self, parent=None, auth_data=None, game_name=""):
         super().__init__(parent)
         self.setWindowTitle(f"Search for {game_name}")
-        self.resize(600, 400)
+        self.resize(400, 200)
         
         self.auth_data = auth_data
         self.game_name = game_name
@@ -178,7 +178,9 @@ class GameSearchDialog(QDialog):
             item = QListWidgetItem(game["name"])
             item.setData(Qt.UserRole, game)
             self.game_list.addItem(item)
-    
+        
+        self.game_list.itemDoubleClicked.connect(self.accept)
+
     def on_search_failed(self, error_message):
         self.status_label.setText(f"Error: {error_message}")
     
@@ -187,39 +189,423 @@ class GameSearchDialog(QDialog):
         self.select_button.setEnabled(True)
 
 
-class SaveSelectionDialog(QDialog):
-    def __init__(self, parent=None):
+class LoadingDialog(QDialog):
+    def __init__(self, parent=None, message="Loading..."):
         super().__init__(parent)
-        self.setWindowTitle("Game Save Selection")
-        self.setMinimumWidth(400)
+        self.setWindowTitle("Please wait")
+        self.setFixedSize(400, 150)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.setModal(True)
         
-        self.selected_paths = []
+        self.setStyleSheet("""
+            QDialog {
+                background-color: rgba(40, 40, 40, 240);
+                border: 1px solid #555;
+                border-radius: 8px;
+            }
+            QLabel {
+                color: white;
+                background-color: transparent;
+            }
+        """)
         
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignCenter)
+        
+        self.message_label = QLabel(message)
+        self.message_label.setAlignment(Qt.AlignCenter)
+        self.message_label.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self.message_label)
+        
+        self.detail_label = QLabel("")
+        self.detail_label.setAlignment(Qt.AlignCenter)
+        self.detail_label.setStyleSheet("font-size: 12px; color: #aaa;")
+        layout.addWidget(self.detail_label)
+        
+        self.setWindowOpacity(0.95)
+    
+    def set_message(self, message):
+        self.message_label.setText(message)
+    
+    def set_detail(self, detail):
+        self.detail_label.setText(detail)
+    
+    def center_on_parent(self):
+        if self.parent():
+            parent_pos = self.parent().geometry()
+            x = parent_pos.x() + (parent_pos.width() - self.width()) // 2
+            y = parent_pos.y() + (parent_pos.height() - self.height()) // 2
+            self.move(x, y)
+
+
+class SaveSelectionDialog(QDialog):
+    def __init__(self, parent=None, game_name="", auth_data=None, suggested_paths=None):
+        super().__init__(parent)
+        self.setWindowTitle("Game Save Selection")
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(300)
+        
+        self.selected_paths = []
+        self.game_name = game_name
+        self.auth_data = auth_data
+        self.suggested_paths = suggested_paths or {}  # Now a dict of store types and paths
+        self.threadpool = QThreadPool.globalInstance()
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)  # Reduce overall spacing
+        
+        # Game name display
+        if self.game_name:
+            name_label = QLabel(f"<h2>{self.game_name}</h2>")
+            name_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(name_label)
+        else:
+            # Simple input for game name if not provided
+            name_layout = QHBoxLayout()
+            
+            self.game_name_input = QLineEdit()
+            self.game_name_input.setPlaceholderText("Enter the game name")
+            name_layout.addWidget(self.game_name_input, 1)
+            
+            search_button = QPushButton("Search")
+            search_button.clicked.connect(self.search_game_name)
+            name_layout.addWidget(search_button)
+            
+            layout.addLayout(name_layout)
+            
+            status_layout = QHBoxLayout()
+            self.status_label = QLabel("Enter a game name to search for its save location")
+            status_layout.addWidget(self.status_label)
+            layout.addLayout(status_layout)
+        
+        # Create a scroll area to contain all content and handle resizing gracefully
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(4)  # Tighter spacing between elements
+        
+        # Selection options
+        options_group = QWidget()
+        options_layout = QVBoxLayout(options_group)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(4)  # Reduce spacing between radio buttons
+        
+        options_header = QLabel("<b>Select Save Location:</b>")
+        options_header.setStyleSheet("font-size: 12px;")
+        options_layout.addWidget(options_header)
+        
+        radio_layout = QHBoxLayout()  # Use horizontal layout for radio buttons
+        radio_layout.setContentsMargins(0, 0, 0, 0)
+        radio_layout.setSpacing(10)
         
         self.option_group = QButtonGroup(self)
-        self.files_option = QRadioButton("Select save files")
+        self.files_option = QRadioButton("Select individual save files")
         self.directory_option = QRadioButton("Define save directory")
         self.option_group.addButton(self.files_option)
         self.option_group.addButton(self.directory_option)
         
+        # Default selection
         self.files_option.setChecked(True)
         
-        options_layout = QVBoxLayout()
-        options_layout.addWidget(self.files_option)
-        options_layout.addWidget(self.directory_option)
-        layout.addLayout(options_layout)
+        radio_layout.addWidget(self.files_option)
+        radio_layout.addWidget(self.directory_option)
+        radio_layout.addStretch(1)  # Add stretch to keep radio buttons left-aligned
+        options_layout.addLayout(radio_layout)
         
+        # Suggested paths section with improved styling - reduce margin
+        suggested_label = QLabel("<b>Suggested Save Locations:</b>")
+        suggested_label.setStyleSheet("font-size: 12px;")
+        options_layout.addWidget(suggested_label, 0, Qt.AlignLeft)
+        
+        # Create a table for the paths with better fixed height
+        self.paths_table = QListWidget()
+        self.paths_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.paths_table.setItemDelegate(HTMLDelegate())
+        self.paths_table.setMinimumHeight(50)  # Reduce minimum height
+        self.paths_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)  # Use Preferred instead of Expanding
+        self.paths_table.setAlternatingRowColors(True)
+        self.paths_table.setStyleSheet("""
+            QListWidget::item { padding: 4px; }
+            QListWidget::item:selected { background-color: #0078d4; color: white; }
+        """)
+        self.paths_table.itemDoubleClicked.connect(self.use_suggested_path)
+        
+        options_layout.addWidget(self.paths_table)
+        
+        content_layout.addWidget(options_group)
+        
+        # Populate table if we have suggestions
+        has_valid_paths = False
+        if self.suggested_paths:
+            for store_type, path in self.suggested_paths.items():
+                # Check if the path exists or parent directory exists
+                path_exists = os.path.exists(path)
+                parent_exists = os.path.exists(os.path.dirname(path))
+                
+                # Only add it if the path or parent directory exists
+                if path_exists or parent_exists:
+                    has_valid_paths = True
+                    item = QListWidgetItem()
+                    
+                    store_display = f"{store_type}: "
+                    path_display = path
+                    item.setText(f"<b>{store_display}</b>{path_display}")
+                    
+                    # Use font formatting instead of HTML
+                    font = item.font()
+                    item.setFont(font)
+                    
+                    # Set color using the item's foreground
+                    if path_exists:
+                        item.setForeground(QColor("#c9deff"))
+                    else:
+                        item.setForeground(QColor("gray"))
+                    
+                    item.setData(Qt.UserRole, {"store": store_type, "path": path, "exists": path_exists})
+                    if path_exists:
+                        item.setIcon(QIcon.fromTheme("dialog-ok") or QIcon())
+                    self.paths_table.addItem(item)
+        
+        if not has_valid_paths:
+            # Show placeholder
+            item = QListWidgetItem("No suggested paths available on this system")
+            item.setForeground(QColor(128, 128, 128))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.paths_table.addItem(item)
+            self.paths_table.setEnabled(False)
+        
+        # Info label for double-clicking
+        if has_valid_paths:
+            hint_label = QLabel("Double-click a path to use it or click 'Proceed' to select manually")
+            hint_label.setAlignment(Qt.AlignCenter)
+            hint_label.setStyleSheet("font-style: italic; color: #666; font-size: 10px;")  # Smaller font
+            content_layout.addWidget(hint_label, 0, Qt.AlignCenter)
+        
+        scroll_area.setWidget(content_widget)
+        layout.addWidget(scroll_area, 1)  # Give it a stretch factor of 1
+        
+        # Buttons
         button_layout = QHBoxLayout()
-        proceed_button = QPushButton("Proceed")
+        
+        self.proceed_button = QPushButton("Proceed")
+        self.proceed_button.clicked.connect(self.handle_selection)
+        button_layout.addWidget(self.proceed_button)
+        
         cancel_button = QPushButton("Cancel")
-        
-        proceed_button.clicked.connect(self.handle_selection)
         cancel_button.clicked.connect(self.reject)
-        
-        button_layout.addWidget(proceed_button)
         button_layout.addWidget(cancel_button)
+        
         layout.addLayout(button_layout)
+        
+        # Disable proceed button if no game name provided
+        if not self.game_name:
+            self.proceed_button.setEnabled(False)
+    
+    def search_game_name(self):
+        game_name = self.game_name_input.text().strip()
+        if not game_name:
+            QMessageBox.warning(self, "Missing Information", "Please enter a game name")
+            return
+        
+        self.game_name = game_name
+        self.status_label.setText(f"Searching for '{game_name}'...")
+        self.game_name_input.setEnabled(False)
+        
+        loading_dialog = LoadingDialog(self, f"Searching for save locations for '{game_name}'")
+        loading_dialog.center_on_parent()
+        loading_dialog.show()
+        QApplication.processEvents()
+        
+        # First, try to fetch from IGDB if auth data is available
+        if self.auth_data:
+            worker = IGDBGameSearchWorker(self.auth_data, game_name)
+            worker.signals.search_complete.connect(lambda games: self.on_search_complete(games, loading_dialog))
+            worker.signals.search_failed.connect(lambda _: self.fetch_wiki_save_locations(game_name, loading_dialog))
+            worker.signals.finished.connect(lambda: self.game_name_input.setEnabled(True))
+            
+            self.threadpool.start(worker)
+        else:
+            # If no IGDB auth, go straight to PCGamingWiki
+            self.fetch_wiki_save_locations(game_name, loading_dialog)
+
+    def on_search_complete(self, games, loading_dialog):
+        if not games:
+            # No results from IGDB, try PCGamingWiki with original name
+            self.status_label.setText("No games found on IGDB, checking PCGamingWiki...")
+            loading_dialog.set_message("No games found on IGDB")
+            loading_dialog.set_detail("Checking PCGamingWiki...")
+            self.fetch_wiki_save_locations(self.game_name_input.text().strip(), loading_dialog)
+            return
+        
+        # Use the first result's official name
+        game = games[0]
+        official_name = game["name"]
+        self.game_name = official_name
+        self.game_name_input.setText(official_name)
+        
+        # Now fetch save locations with the official name
+        loading_dialog.set_message(f"Found game: {official_name}")
+        loading_dialog.set_detail("Fetching save locations from PCGamingWiki...")
+        self.fetch_wiki_save_locations(official_name, loading_dialog)
+    
+    def fetch_wiki_save_locations(self, game_name, loading_dialog):
+        self.status_label.setText(f"Fetching save locations for '{game_name}' from PCGamingWiki...")
+        
+        # Make sure the loading overlay is visible
+        loading_dialog.setVisible(True)
+        loading_dialog.raise_()
+        QApplication.processEvents()  # Force UI update
+        
+        # Run in a separate thread to avoid freezing the UI
+        import threading
+        
+        def fetch_thread():
+            from utils import fetch_pcgamingwiki_save_locations
+            paths = fetch_pcgamingwiki_save_locations(game_name)
+            
+            # Update the UI in the main thread
+            from PySide6.QtCore import QMetaObject, Qt, Q_ARG, QObject
+            QMetaObject.invokeMethod(
+                self, "update_suggested_paths", 
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(QObject, paths),
+                Q_ARG(QObject, loading_dialog)
+            )
+        
+        thread = threading.Thread(target=fetch_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def update_suggested_paths(self, paths_dict, loading_dialog):
+        # Hide the loading overlay
+        loading_dialog.close()
+        
+        self.suggested_paths = paths_dict
+        self.paths_table.clear()
+        
+        has_valid_paths = False
+        for store_type, path in self.suggested_paths.items():
+            # Check if the path exists or parent directory exists
+            path_exists = os.path.exists(path)
+            parent_exists = os.path.exists(os.path.dirname(path))
+            
+            # Only add it if the path or parent directory exists
+            if path_exists or parent_exists:
+                has_valid_paths = True
+                item = QListWidgetItem()
+                
+                # Don't use HTML formatting to avoid rendering issues
+                store_display = f"{store_type}: "
+                path_display = path
+                item.setText(f"{store_display}{path_display}")
+                
+                # Use font formatting instead of HTML
+                font = item.font()
+                font.setBold(True)  # Make store type bold
+                item.setFont(font)
+                
+                # Set color using the item's foreground
+                if path_exists:
+                    item.setForeground(QColor("darkgreen"))
+                else:
+                    item.setForeground(QColor("gray"))
+                
+                item.setData(Qt.UserRole, {"store": store_type, "path": path, "exists": path_exists})
+                if path_exists:
+                    item.setIcon(QIcon.fromTheme("dialog-ok") or QIcon())
+                self.paths_table.addItem(item)
+        
+        if not has_valid_paths:
+            path_count = len(paths_dict)
+            if path_count > 0:
+                self.status_label.setText(f"Found {path_count} save locations, but none exist on this system")
+            else:
+                self.status_label.setText("No save locations found")
+                
+            # Show placeholder
+            item = QListWidgetItem("No suggested paths available on this system")
+            item.setForeground(QColor(128, 128, 128))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.paths_table.addItem(item)
+            self.paths_table.setEnabled(False)
+        else:
+            self.status_label.setText(f"Found {len(paths_dict)} suggested save locations")
+            self.paths_table.setEnabled(True)
+        
+        # Enable the proceed button now that we've finished searching
+        self.proceed_button.setEnabled(True)
+    
+    def showEvent(self, event):
+        # Ensure overlay covers the entire dialog when shown
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.setGeometry(0, 0, self.width(), self.height())
+        super().showEvent(event)
+    
+    def resizeEvent(self, event):
+        # Ensure loading overlay covers the entire dialog when resized
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.setGeometry(0, 0, self.width(), self.height())
+        super().resizeEvent(event)
+    
+    def use_suggested_path(self, item):
+        path_data = item.data(Qt.UserRole)
+        if not path_data:  # No data means it's the placeholder
+            return
+            
+        path = path_data["path"]
+        
+        if path_data["exists"]:
+            # If it exists, select it directly
+            self.selected_paths = [path]
+            if os.path.isdir(path):
+                self.directory_option.setChecked(True)
+            else:
+                self.files_option.setChecked(True)
+            self.accept()
+        else:
+            # If parent directory exists but not the path itself
+            parent_dir = os.path.dirname(path)
+            if os.path.exists(parent_dir):
+                # If it doesn't exist, ask what to do
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Path Not Found")
+                msg.setText(f"The suggested path does not exist:\n{path}")
+                msg.setInformativeText(f"Do you want to create this directory?\n\nStore type: {path_data['store']}")
+                msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                msg.setDefaultButton(QMessageBox.Yes)
+                
+                result = msg.exec()
+                
+                if result == QMessageBox.Yes:
+                    # Create directory
+                    try:
+                        os.makedirs(path, exist_ok=True)
+                        self.selected_paths = [path]
+                        self.directory_option.setChecked(True)
+                        self.accept()
+                    except Exception as e:
+                        QMessageBox.critical(self, "Error", f"Failed to create directory: {e}")
+                elif result == QMessageBox.No:
+                    # Proceed with normal selection
+                    if self.files_option.isChecked():
+                        self.select_files()
+                    else:
+                        self.define_directory()
+            else:
+                QMessageBox.warning(
+                    self, 
+                    "Path Not Available", 
+                    f"The parent directory does not exist:\n{parent_dir}\n\nPlease select a different location."
+                )
     
     def handle_selection(self):
         if self.files_option.isChecked():
@@ -546,15 +932,21 @@ class GameNameSuggestionDialog(QDialog):
     def __init__(self, parent=None, suggestions=None):
         super().__init__(parent)
         self.setWindowTitle("Game Title")
-        self.resize(400, 300)
+        self.resize(400, 75)  # Increase height to accommodate suggestions list
         
         self.suggestions = suggestions or []
         self.selected_name = ""
+        self.loading = False
         
         self.init_ui()
     
     def init_ui(self):
         layout = QVBoxLayout(self)
+        
+        # Add description label
+        description = QLabel("Enter or select a name for this game:")
+        description.setStyleSheet("font-weight: bold;")
+        layout.addWidget(description)
         
         form = QFormLayout()
         self.name_input = QLineEdit()
@@ -562,39 +954,86 @@ class GameNameSuggestionDialog(QDialog):
         form.addRow("Game Title:", self.name_input)
         layout.addLayout(form)
         
-        if self.suggestions:
-            layout.addWidget(QLabel("Or select from these suggestions:"))
-            
-            self.suggestions_list = QListWidget()
-            for suggestion in self.suggestions:
-                self.suggestions_list.addItem(suggestion)
-            self.suggestions_list.itemClicked.connect(self.on_suggestion_clicked)
-            layout.addWidget(self.suggestions_list)
-        else:
-            layout.addWidget(QLabel("No suggestions found based on file paths."))
-        
         buttons_layout = QHBoxLayout()
         
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(self.accept_name)
-        buttons_layout.addWidget(ok_button)
+        self.ok_button = QPushButton("OK")
+        self.ok_button.clicked.connect(self.accept_name)
+        buttons_layout.addWidget(self.ok_button)
         
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
         buttons_layout.addWidget(cancel_button)
         
         layout.addLayout(buttons_layout)
+        
+        # Populate suggestions if available
+        if self.suggestions:
+            self.populate_suggestions(self.suggestions)
+    
+    def populate_suggestions(self, suggestions):
+        """Populate the suggestions list"""
+        self.suggestions_list.clear()
+        if suggestions:
+            self.suggestions_list.addItems(suggestions)
+            self.suggestions_list.setCurrentRow(0) if suggestions else None
+        else:
+            self.suggestions_list.addItem("No suggestions available")
+            self.suggestions_list.setEnabled(False)
     
     def on_suggestion_clicked(self, item):
+        """Handle suggestion click"""
         self.name_input.setText(item.text())
     
+    def on_suggestion_double_clicked(self, item):
+        """Handle suggestion double-click by accepting the dialog"""
+        self.name_input.setText(item.text())
+        self.accept_name()
+    
     def accept_name(self):
-        self.selected_name = self.name_input.text()
+        """Validate and accept the entered name"""
+        self.selected_name = self.name_input.text().strip()
         if self.selected_name:
             self.accept()
         else:
             QMessageBox.warning(self, "Missing Title", "Please enter or select a game title.")
+    
+    def set_loading(self, is_loading):
+        """Show/hide the loading indicator"""
+        self.loading = is_loading
+        self.loading_label.setVisible(is_loading)
+        self.suggestions_list.setVisible(not is_loading)
+        self.ok_button.setEnabled(not is_loading)
+        
+        if is_loading:
+            self.suggestions_list.clear()
+            QApplication.processEvents()  # Force UI update
+    
+    def closeEvent(self, event):
+        """Handle window close events"""
+        if self.loading:
+            # If loading, interpret as cancel
+            self.selected_name = ""
+            self.reject()
+        else:
+            # Normal close behavior
+            event.accept()
 
+class HTMLDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        painter.save()
+        text = index.data()
+        doc = QTextDocument()
+        doc.setHtml(text)
+        doc.setTextWidth(option.rect.width())
+        painter.translate(option.rect.topLeft())
+        doc.drawContents(painter)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        doc = QTextDocument()
+        doc.setHtml(index.data())
+        doc.setTextWidth(option.rect.width())
+        return doc.size().toSize()
 
 class BackupItemDelegate(QStyledItemDelegate):
     """Custom delegate for backup items to show color bar on left side"""
