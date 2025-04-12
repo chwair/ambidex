@@ -9,7 +9,7 @@
 ## Features
 - Quick backup/restoration of any save file(s)/folder
 - Qt6 user interface
-- IGDB integration for fetching game metadata
+- IGDB and PCGamingWiki integration for fetching game metadata and save directory locations
 - Grid-like view for imported games
 - Color and text labeling of backups
 
