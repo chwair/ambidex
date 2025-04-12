@@ -3,7 +3,7 @@
 <div align="center"><img alt="Ambidex Logo" src="https://github.com/user-attachments/assets/2c237c90-4a83-4ad2-bbe8-4a3f46582371">
 <h1>Ambidex</h1>
 <b>Organizirane varnostne kopije za napredke v igrah</b><br><br>
-<img alt="Ambidex Preview" src="https://github.com/user-attachments/assets/84250386-9a86-43cc-88af-7dae40d86f30">
+<img alt="Ambidex Preview" src="https://github.com/user-attachments/assets/ce62c97e-d50c-4cbe-88e9-5effa4538a1a">
 </div>
 
 ## Zmogljivosti
@@ -11,10 +11,10 @@
 - Qt6 uporabniški vmesnik
 - Integracija z IGDB za pridobivanje podatkov o igrah
 - Mrežni pogled dodanih iger
+- Označevanje shranjenih kopij z barvo in/ali besedilom
 
-## Gradnja
-Namesti vse v requirements.txt ter začni gradnjo z build.py.
-
+## Grajenje
+Namesti Nuitka, Visual Studio Build Tools z Clang-om in vse v requirements.txt, nato zgradi s skripto build.py.
 
 ## License
 MIT
