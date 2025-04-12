@@ -4,6 +4,7 @@ import requests
 import re
 import logging
 import subprocess
+import sys
 from pathlib import Path
 
 logging.basicConfig(
@@ -69,10 +70,7 @@ def generate_game_name_suggestions(paths):
     
     return cleaned_suggestions
 
-def open_directory(path):
-    import sys
-    import subprocess
-    
+def open_directory(path):    
     try:
         path = os.path.normpath(path)
         
@@ -146,10 +144,10 @@ def fetch_pcgamingwiki_save_locations(game_name):
         if 'parse' not in content_data:
             return {}
         
-        # Extract paths from the HTML content
+        # extract paths from the HTML content
         html_content = content_data['parse']['text']
         
-        # Pattern to match rows in the table
+        # pattern to match rows in the table
         row_pattern = r'<th\s+scope="row"\s+class="table-gamedata-body-system">(.*?)</th>\s*?<td\s+class="table-gamedata-body-location"><span[^>]*>(.*?)</span></td>'
         store_rows = re.findall(row_pattern, html_content, re.DOTALL)
         
@@ -157,20 +155,22 @@ def fetch_pcgamingwiki_save_locations(game_name):
             store_type = row[0].strip()
             path_html = row[1]
             
-            # Clean up the path - remove HTML tags
+            # clean up the path - remove HTML tags
             path = re.sub(r'<[^>]*>', '', path_html)
             path = path.strip()
             
-            # Normalize backslashes for Windows paths
+            # normalize backslashes for Windows paths
             path = re.sub(r'\\+', '\\\\', path)
             
-            # Replace common environment variables
+            # replace common environment variables
             try:
                 if '%USERPROFILE%' in path:
                     if '%USERPROFILE%\\Documents' in path:
                         # run powershell command to find actual documents folder
+                        startupinfo = subprocess.STARTUPINFO()
+                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                         documents = subprocess.run(['powershell', '-Command', '[Environment]::GetFolderPath("MyDocuments")'], 
-                                                    capture_output=True, text=True).stdout.strip()
+                                                    capture_output=True, text=True, startupinfo=startupinfo).stdout.strip()
                         path = path.replace('%USERPROFILE%\\Documents', documents)
                     else:
                         user_profile = os.path.expandvars('%USERPROFILE%')

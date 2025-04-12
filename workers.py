@@ -127,18 +127,66 @@ class IGDBImageDownloadWorker(QRunnable):
             image_id = cover_data["image_id"]
             image_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{image_id}.jpg"
             
-            response = requests.get(image_url)
-            response.raise_for_status()
+            try:
+                max_retries = 3
+                retry_count = 0
+                while retry_count < max_retries:
+                    try:
+                        response = requests.get(image_url, timeout=15)  
+                        response.raise_for_status()
+                        break
+                    except requests.exceptions.RequestException as e:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            raise
+                        time.sleep(1)  # Wait before retrying
+            except requests.exceptions.RequestException as e:
+                self.signals.search_failed.emit(f"Failed to download image: {str(e)}")
+                return
             
-            os.makedirs(self.destination_folder, exist_ok=True)
+            try:
+                os.makedirs(self.destination_folder, exist_ok=True)
+            except OSError as e:
+                self.signals.search_failed.emit(f"Failed to create image directory: {str(e)}")
+                return
             
-            safe_name = self.make_safe_filename(self.game_data["name"])
-            file_path = os.path.join(self.destination_folder, f"{safe_name}.jpg")
-            
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-            
-            self.signals.image_downloaded.emit(self.game_data["name"], file_path, self.game_data["name"])
+            try:
+                safe_name = self.make_safe_filename(self.game_data["name"])
+                file_path = os.path.join(self.destination_folder, f"{safe_name}.jpg")
+                
+                if len(response.content) < 100:  
+                    self.signals.search_failed.emit("Downloaded image is too small or empty")
+                    return
+                
+                temp_path = file_path + ".tmp"
+                with open(temp_path, 'wb') as f:
+                    f.write(response.content)
+                
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+                os.rename(temp_path, file_path)
+                
+                if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                    self.signals.search_failed.emit("Failed to save image file")
+                    return
+                
+                try:
+                    from PySide6.QtGui import QImageReader
+                    reader = QImageReader(file_path)
+                    if not reader.canRead():
+                        os.unlink(file_path)  
+                        self.signals.search_failed.emit("Downloaded file is not a valid image")
+                        return
+                except Exception:
+                    pass
+                
+                self.signals.image_downloaded.emit(self.game_data["name"], file_path, self.game_data["name"])
+            except IOError as e:
+                self.signals.search_failed.emit(f"Failed to save image: {str(e)}")
+                return
+            except Exception as e:
+                self.signals.search_failed.emit(f"Error processing image: {str(e)}")
+                return
             
         except Exception as e:
             self.signals.search_failed.emit(f"Image download failed: {str(e)}")
