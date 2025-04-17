@@ -737,14 +737,13 @@ class GameSaveBackup(QMainWindow):
             safe_name = utils.make_safe_filename(game_data["name"])
             expected_image_path = os.path.join(images_dir, f"{safe_name}.jpg")
             
-            # Create worker in a way that properly maintains references
             worker = IGDBImageDownloadWorker(self.config["igdb_auth"], game_data, images_dir)
             
-            # Store worker reference to prevent garbage collection issues in Nuitka builds
+            # store worker reference to prevent garbage collection issues in nuitka builds
             self.current_worker = worker
             
             if is_new_game:
-                # Use a stable lambda to prevent issues in compiled code
+                # use a stable lambda to prevent issues in builds
                 worker.signals.image_downloaded.connect(
                     lambda name, path, official_name: self.finalize_game_addition(path, official_name))
             else:
@@ -767,7 +766,7 @@ class GameSaveBackup(QMainWindow):
                 QMessageBox.warning(self, "Error", f"An unexpected error occurred: {str(e)}")
 
     def image_download_finished(self, is_new_game=False, expected_image_path=None):
-        """Handle cleanup after image download regardless of success or failure"""
+        """handle cleanup after image download regardless of success or failure"""
         try:
             if is_new_game and hasattr(self, "current_game_addition") and self.current_game_addition:
                 if not hasattr(self, "current_game_data") or not self.current_game_data:
