@@ -615,7 +615,6 @@ class GameSaveBackup(QMainWindow):
             QApplication.processEvents()
             suggested_paths = utils.fetch_pcgamingwiki_save_locations(game_name)
         except Exception as e:
-            logger.error(f"Error fetching PCGamingWiki data: {e}")
             suggested_paths = {}
         finally:
             loading_dialog.close()
@@ -680,12 +679,32 @@ class GameSaveBackup(QMainWindow):
         search_dialog = GameSearchDialog(self, self.config["igdb_auth"], game_name)
         
         if search_dialog.exec() == QDialog.Accepted and search_dialog.selected_game:
+            logger.info(f"Selected game metadata for: {game_name}")
+            # prevent garbage collection to avoid bugs with nuitka
             self.current_game_data = search_dialog.selected_game
-            if is_new_game:
-                self.download_game_cover(search_dialog.selected_game, is_new_game=True)
+            
+            if not is_new_game:
+                try:
+                    # prevent threading issues
+                    logger.info(f"Downloading cover for existing game: {game_name}")
+                    self.download_game_cover(search_dialog.selected_game, is_new_game=False, game_name=game_name)
+                except Exception as e:
+                    logger.error(f"Error downloading cover: {str(e)}")
+                    # update metadata regardless of download success
+                    if game_name in self.config["games"] and "thumb_data" in search_dialog.selected_game:
+                        try:
+                            self.config["games"][game_name]["thumb_data"] = base64.b64encode(
+                                search_dialog.selected_game["thumb_data"]).decode('utf-8')
+                            self.save_config()
+                            self.load_games()
+                            QMessageBox.information(self, "Metadata Updated", 
+                                                 f"Metadata for '{game_name}' has been updated.")
+                        except Exception as e2:
+                            logger.error(f"Error updating metadata directly: {str(e2)}")
             else:
-                self.download_game_cover(search_dialog.selected_game, game_name=game_name)
+                self.download_game_cover(search_dialog.selected_game, is_new_game=True)
         else:
+            logger.info(f"User canceled metadata search for: {game_name}")
             if is_new_game and self.current_game_addition:
                 self.finalize_game_addition(None, None)
     
@@ -709,7 +728,6 @@ class GameSaveBackup(QMainWindow):
             try:
                 os.makedirs(images_dir, exist_ok=True)
             except Exception as e:
-                logger.error(f"Failed to create images directory: {e}")
                 if is_new_game and self.current_game_addition:
                     self.finalize_game_addition(None, None)
                 else:
@@ -719,23 +737,30 @@ class GameSaveBackup(QMainWindow):
             safe_name = utils.make_safe_filename(game_data["name"])
             expected_image_path = os.path.join(images_dir, f"{safe_name}.jpg")
             
+            # Create worker in a way that properly maintains references
             worker = IGDBImageDownloadWorker(self.config["igdb_auth"], game_data, images_dir)
             
+            # Store worker reference to prevent garbage collection issues in Nuitka builds
+            self.current_worker = worker
+            
             if is_new_game:
-                worker.signals.image_downloaded.connect(lambda name, path, official_name: 
-                                            self.finalize_game_addition(path, official_name))
+                # Use a stable lambda to prevent issues in compiled code
+                worker.signals.image_downloaded.connect(
+                    lambda name, path, official_name: self.finalize_game_addition(path, official_name))
             else:
                 original_game_name = game_name if game_name else game_data["name"]
-                worker.signals.image_downloaded.connect(lambda name, path, official_name: 
-                                            self.on_image_downloaded(original_game_name, path, official_name))
+                worker.signals.image_downloaded.connect(
+                    lambda name, path, official_name: self.on_image_downloaded(original_game_name, path, official_name))
             
-            worker.signals.search_failed.connect(lambda msg: 
-                                    self.handle_image_download_failure(msg, is_new_game))
-            worker.signals.finished.connect(lambda: self.image_download_finished(is_new_game, expected_image_path))
+            worker.signals.search_failed.connect(
+                lambda msg: self.handle_image_download_failure(msg, is_new_game))
+            
+            worker.signals.finished.connect(
+                lambda: self.image_download_finished(is_new_game, expected_image_path))
             
             self.threadpool.start(worker)
         except Exception as e:
-            logger.error(f"Uncaught exception in download_game_cover: {str(e)}")
+            logger.error(f"Error in download_game_cover: {str(e)}")
             if is_new_game and self.current_game_addition:
                 self.finalize_game_addition(None, None)
             else:
@@ -769,91 +794,205 @@ class GameSaveBackup(QMainWindow):
                 self.finalize_game_addition(None, None)
 
     def on_image_downloaded(self, game_name, image_path, official_name):
-        if game_name in self.config["games"]:
-            self.config["games"][game_name]["image"] = image_path
+        try:
+            logger.info(f"Image downloaded for {game_name}, path: {image_path}")
             
-            if hasattr(self, "current_game_data") and self.current_game_data:
-                if "thumb_data" in self.current_game_data:
-                    self.config["games"][game_name]["thumb_data"] = base64.b64encode(self.current_game_data["thumb_data"]).decode('utf-8')
-            
-            if official_name and official_name != game_name:
-                if official_name not in self.config["games"]:
-                    self.config["games"][official_name] = self.config["games"][game_name].copy()
-                    del self.config["games"][game_name]
-                    QMessageBox.information(self, "Game Renamed", 
-                                          f"Game has been renamed from '{game_name}' to '{official_name}'.")
-            
-            self.save_config()
-            self.load_games()
-            self.update_games_list()
-            
-            QMessageBox.information(self, "Image Downloaded", 
-                                f"Cover image for '{official_name or game_name}' has been downloaded.")
+            if game_name in self.config["games"]:
+                # Make sure we use absolute path to avoid issues in Nuitka build
+                if image_path:
+                    abs_image_path = os.path.abspath(os.path.normpath(image_path))
+                    if os.path.exists(abs_image_path):
+                        logger.info(f"Setting image path to: {abs_image_path}")
+                        self.config["games"][game_name]["image"] = abs_image_path
+                    else:
+                        logger.error(f"Image path doesn't exist: {abs_image_path}")
+                        # Try fallback to expected path
+                        images_dir = os.path.join(self.app_dir, "images")
+                        safe_name = utils.make_safe_filename(game_name)
+                        expected_path = os.path.join(images_dir, f"{safe_name}.jpg")
+                        if os.path.exists(expected_path):
+                            logger.info(f"Using fallback image path: {expected_path}")
+                            self.config["games"][game_name]["image"] = expected_path
+                
+                # Set thumbnail data if available
+                if hasattr(self, "current_game_data") and self.current_game_data:
+                    if "thumb_data" in self.current_game_data and self.current_game_data["thumb_data"]:
+                        try:
+                            logger.info("Setting thumbnail data")
+                            self.config["games"][game_name]["thumb_data"] = base64.b64encode(
+                                self.current_game_data["thumb_data"]).decode('utf-8')
+                        except Exception as e:
+                            logger.error(f"Error setting thumb data: {str(e)}")
+                
+                # Handle game renaming
+                if official_name and official_name != game_name:
+                    logger.info(f"Game name changed from {game_name} to {official_name}")
+                    if official_name not in self.config["games"]:
+                        self.config["games"][official_name] = self.config["games"][game_name].copy()
+                        del self.config["games"][game_name]
+                        
+                        # Notify user about the rename
+                        QMessageBox.information(self, "Game Renamed", 
+                                              f"Game has been renamed from '{game_name}' to '{official_name}'.")
+                
+                # Save configuration and update UI
+                try:
+                    logger.info("Saving config after metadata update")
+                    self.save_config()
+                except Exception as e:
+                    logger.error(f"Error saving config: {str(e)}")
+                
+                try:
+                    logger.info("Updating UI after metadata update")
+                    self.load_games()
+                    self.update_games_list()
+                except Exception as e:
+                    logger.error(f"Error updating UI: {str(e)}")
+                
+                # Clean up worker reference
+                if hasattr(self, "current_worker"):
+                    logger.info("Cleaning up worker reference")
+                    self.current_worker = None
+                
+                # Clean up game data reference
+                if hasattr(self, "current_game_data"):
+                    logger.info("Cleaning up game data reference")
+                    delattr(self, "current_game_data")
+                
+                QMessageBox.information(self, "Image Downloaded", 
+                                    f"Cover image for '{official_name or game_name}' has been downloaded.")
+        except Exception as e:
+            logger.error(f"Uncaught error in on_image_downloaded: {str(e)}")
+            # Fallback to ensure config is saved
+            try:
+                self.save_config()
+                self.load_games()
+                self.update_games_list()
+                
+                if hasattr(self, "current_worker"):
+                    self.current_worker = None
+                if hasattr(self, "current_game_data"):
+                    delattr(self, "current_game_data")
+                    
+                QMessageBox.information(self, "Metadata Updated", 
+                                    f"Metadata for '{game_name}' has been updated.")
+            except Exception as e2:
+                logger.error(f"Error in on_image_downloaded fallback: {str(e2)}")
     
     def finalize_game_addition(self, image_path, official_name):
         """complete the game addition process after metadata and image are retrieved"""
         try:
             if not self.current_game_addition:
+                logger.error("No current_game_addition available in finalize_game_addition")
                 return
             
             game_name = official_name if official_name else self.current_game_addition["name"]
+            logger.info(f"Finalizing game addition for: {game_name}")
             
             if official_name and official_name != self.current_game_addition["name"]:
+                logger.info(f"Game name changed from {self.current_game_addition['name']} to {official_name}")
                 if self.current_game_addition["name"] in self.config["games"]:
                     if game_name in self.config["games"]:
                         # merge games with the same name
+                        logger.info(f"Merging game data for {game_name}")
                         for path in self.config["games"][self.current_game_addition["name"]]["save_paths"]:
                             if path not in self.config["games"][game_name]["save_paths"]:
                                 self.config["games"][game_name]["save_paths"].append(path)
                         
-                        self.config["games"][game_name]["backups"].extend(
-                            self.config["games"][self.current_game_addition["name"]]["backups"]
-                        )
+                        # Merge backups if they exist
+                        if "backups" in self.config["games"][self.current_game_addition["name"]]:
+                            if "backups" not in self.config["games"][game_name]:
+                                self.config["games"][game_name]["backups"] = []
+                            
+                            self.config["games"][game_name]["backups"].extend(
+                                self.config["games"][self.current_game_addition["name"]]["backups"]
+                            )
                         
                         # delete the old one
                         del self.config["games"][self.current_game_addition["name"]]
                     else:
+                        logger.info(f"Renaming game from {self.current_game_addition['name']} to {game_name}")
                         self.config["games"][game_name] = self.config["games"][self.current_game_addition["name"]]
                         del self.config["games"][self.current_game_addition["name"]]
             
+            # Handle image path
             if image_path and game_name in self.config["games"]:
                 try:
-                    if os.path.exists(image_path):
-                        self.config["games"][game_name]["image"] = image_path
+                    logger.info(f"Checking image path: {image_path}")
+                    # Use absolute paths to prevent issues in Nuitka build
+                    abs_image_path = os.path.abspath(os.path.normpath(image_path))
+                    if os.path.exists(abs_image_path):
+                        logger.info(f"Setting image path to: {abs_image_path}")
+                        self.config["games"][game_name]["image"] = abs_image_path
                     else:
-                        logger.error(f"Image path does not exist: {image_path}")
+                        logger.error(f"Image path does not exist: {abs_image_path}")
+                        # Try to find the image in the images directory as fallback
+                        try:
+                            images_dir = os.path.join(self.app_dir, "images")
+                            safe_name = utils.make_safe_filename(game_name)
+                            expected_image_path = os.path.join(images_dir, f"{safe_name}.jpg")
+                            if os.path.exists(expected_image_path):
+                                logger.info(f"Using fallback image path: {expected_image_path}")
+                                self.config["games"][game_name]["image"] = expected_image_path
+                        except Exception as img_e:
+                            logger.error(f"Error in fallback image check: {str(img_e)}")
                 except Exception as e:
                     logger.error(f"Error checking image path: {str(e)}")
             
+            # Set thumbnail data if available
+            if hasattr(self, "current_game_data") and self.current_game_data and game_name in self.config["games"]:
+                if "thumb_data" in self.current_game_data and self.current_game_data["thumb_data"]:
+                    try:
+                        logger.info("Setting thumbnail data from current_game_data")
+                        self.config["games"][game_name]["thumb_data"] = base64.b64encode(
+                            self.current_game_data["thumb_data"]).decode('utf-8')
+                    except Exception as e:
+                        logger.error(f"Error setting thumb data: {str(e)}")
+            
+            # Save configuration file
             try:
+                logger.info("Saving config after finalizing game addition")
                 self.save_config()
             except Exception as e:
                 logger.error(f"Error saving config during finalize: {str(e)}")
             
+            # Update UI
             try:
+                logger.info("Updating UI after finalizing game addition")
                 self.load_games()
                 self.update_games_list()
             except Exception as e:
                 logger.error(f"Error updating UI during finalize: {str(e)}")
             
-            # clear the current game data to prevent any more callbacks
+            # Clear current game data to prevent any more callbacks
+            logger.info("Clearing temporary data")
             self.current_game_addition = None
+            
+            # Handle worker cleanup
+            if hasattr(self, "current_worker"):
+                logger.info("Cleaning up worker reference")
+                self.current_worker = None
+                
             if hasattr(self, "current_game_data"):
+                logger.info("Cleaning up game data reference")
                 delattr(self, "current_game_data")
             
             QMessageBox.information(self, "Game Added", 
                                    f"Game '{game_name}' has been added successfully.")
         except Exception as e:
             logger.error(f"Uncaught exception in finalize_game_addition: {str(e)}")
-            # final fallback to ensure UI is updated
+            # Final fallback to ensure UI is updated
             self.current_game_addition = None
+            if hasattr(self, "current_worker"):
+                self.current_worker = None
             if hasattr(self, "current_game_data"):
                 delattr(self, "current_game_data")
             QMessageBox.information(self, "Game Added", "Game has been added.")
             try:
                 self.load_games()
                 self.update_games_list()
-            except:
+            except Exception as ui_e:
+                logger.error(f"Error in fallback UI update: {str(ui_e)}")
                 pass
     
     def show_api_setup(self, after_setup=None):

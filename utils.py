@@ -2,20 +2,12 @@ import os
 import json
 import requests
 import re
-import logging
 import subprocess
 import sys
 from pathlib import Path
+import ctypes
+from ctypes import wintypes
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("ambidex_wiki.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("ambidex.wiki")
 
 def make_safe_filename(name):
     safe_name = name.lower().replace(" ", "_")
@@ -166,11 +158,14 @@ def fetch_pcgamingwiki_save_locations(game_name):
             try:
                 if '%USERPROFILE%' in path:
                     if '%USERPROFILE%\\Documents' in path:
-                        # run powershell command to find actual documents folder
-                        startupinfo = subprocess.STARTUPINFO()
-                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                        documents = subprocess.run(['powershell', '-Command', '[Environment]::GetFolderPath("MyDocuments")'], 
-                                                    capture_output=True, text=True, startupinfo=startupinfo).stdout.strip()
+                        # use wintypes to find actual documents folder
+                        CSIDL_PERSONAL = 5
+                        SHGFP_TYPE_CURRENT = 0 
+                        
+                        buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+                        ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_PERSONAL, None, SHGFP_TYPE_CURRENT, buf)
+                        documents = buf.value
+                        
                         path = path.replace('%USERPROFILE%\\Documents', documents)
                     else:
                         user_profile = os.path.expandvars('%USERPROFILE%')
