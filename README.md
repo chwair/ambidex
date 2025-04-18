@@ -1,4 +1,4 @@
-<div align="center"><img alt="Ambidex Logo" src="https://github.com/user-attachments/assets/2c237c90-4a83-4ad2-bbe8-4a3f46582371">
+<div align="center"><img alt="Ambidex Logo" src="https://github.com/user-attachments/assets/5f8fc431-92ff-41f2-b563-cb15e10fd223">
 <h1>Ambidex</h1>
 <b>Organized backups of save files for games</b><br><br>
 <img alt="Ambidex Preview" src="https://github.com/user-attachments/assets/ce62c97e-d50c-4cbe-88e9-5effa4538a1a">
