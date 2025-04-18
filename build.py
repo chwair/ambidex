@@ -21,8 +21,9 @@ def build():
         "--include-module=ui",
         "--include-module=utils",  
         "--include-module=workers",  
-        "--include-package-data=PySide6",  
+        "--enable-plugin=pyside6",  
         "--follow-imports",
+        "--lto=yes",
         "ambidex.py"  
     ]
     
