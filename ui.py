@@ -3,18 +3,17 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
     QFormLayout, QMessageBox, QListWidget, QListWidgetItem, QFileDialog,
     QListView, QTreeView, QAbstractItemView, QRadioButton, QButtonGroup,
-    QWidget, QLayout, QSizePolicy, QMenu, QColorDialog, QFrame,
-    QStyledItemDelegate, QStyleOptionViewItem, QStyle, QScrollArea,
+    QWidget, QLayout, QSizePolicy, QColorDialog, QFrame,
+    QStyledItemDelegate, QScrollArea,
     QApplication
 )
 from PySide6.QtCore import (
     Qt, QSize, Signal, QMimeData, QRect, QPoint, QThreadPool
 )
 from PySide6.QtGui import (
-    QPixmap, QIcon, QDrag, QPainter, QColor, QCursor, QTextDocument
+    QIcon, QDrag, QPainter, QColor, QTextDocument
 )
 from workers import IGDBAuthWorker, IGDBGameSearchWorker, APITestWorker
-import utils
 
 class IGDBSetupDialog(QDialog):
     setup_complete = Signal(dict)

@@ -4,7 +4,6 @@ import requests
 import re
 import subprocess
 import sys
-from pathlib import Path
 import ctypes
 from ctypes import wintypes
 

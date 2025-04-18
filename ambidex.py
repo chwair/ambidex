@@ -1,12 +1,10 @@
 import sys
 import os
-import json
 import datetime
 import shutil
 import platform
 import base64
 import subprocess
-from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QLabel,
     QPushButton, QHBoxLayout, QMessageBox, QListWidget, QListWidgetItem, QDialog,
@@ -17,10 +15,10 @@ from PySide6.QtCore import Qt, QThreadPool
 
 from ui import (
     IGDBSetupDialog, GameSearchDialog, SaveSelectionDialog,
-    FlowLayout, DraggableWidget, BackupLabelDialog, GameNameSuggestionDialog, 
+    FlowLayout, DraggableWidget, GameNameSuggestionDialog, 
     BackupItemDelegate, LoadingDialog
 )
-from workers import IGDBAuthWorker, IGDBGameSearchWorker, IGDBImageDownloadWorker
+from workers import IGDBImageDownloadWorker
 import utils
 
 

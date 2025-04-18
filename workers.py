@@ -8,7 +8,7 @@ class WorkerSignals(QObject):
     auth_failed = Signal(str)
     search_complete = Signal(list)
     search_failed = Signal(str)
-    image_downloaded = Signal(str, str, str)  # Game name, image path, official game name
+    image_downloaded = Signal(str, str, str)  # game name, image path, official game name
     finished = Signal()
 
 
