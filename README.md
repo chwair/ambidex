@@ -21,7 +21,8 @@ Ambidex is built with Nuitka. To build from source:
 1. Install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) (with [Clang](https://learn.microsoft.com/en-us/cpp/build/clang-support-cmake?view=msvc-170#install))
 2. Install dependencies:
 	```bash
-	pip install -r requirements.txt
+	pip install nuitka
+ 	pip install -r requirements.txt
 	  ```
 3. Run the build script
 	```bash
