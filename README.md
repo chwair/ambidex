@@ -5,7 +5,7 @@
 </div>
 
 ## What is Ambidex?
-**Ambidex** is a Windows app for backing up your game save data. Designed to be quick and intuitive, it's as simple as typing out the game's title and letting it do the rest.
+**Ambidex** is a Windows app for backing up your game save data. It's designed to be quick and intuitive, making backups easy with minimal effort.
 
 ## Features
 - **Effortless save detection**: Autofill game titles and auto-locate save files via **PCGamingWiki**
@@ -20,11 +20,12 @@ Compatible with Windows 11 and Windows 10 (1809 or later)
 Ambidex is built with Nuitka. To build from source:
 1. Install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) (with [Clang](https://learn.microsoft.com/en-us/cpp/build/clang-support-cmake?view=msvc-170#install))
 2. Install dependencies:
+
 	```bash
-	pip install nuitka
- 	pip install -r requirements.txt
+	pip install -r requirements.txt
 	  ```
 3. Run the build script
+	
 	```bash
 	python build.py
 	```
