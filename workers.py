@@ -12,7 +12,7 @@ class WorkerSignals(QObject):
     finished = Signal()
 
 
-class IGDBAuthWorker(QRunnable):
+class LegacyIGDBAuthWorker(QRunnable):
     def __init__(self, client_id, client_secret):
         super().__init__()
         self.client_id = client_id
@@ -49,7 +49,7 @@ class IGDBAuthWorker(QRunnable):
             self.signals.finished.emit()
 
 
-class IGDBGameSearchWorker(QRunnable):
+class LegacyIGDBGameSearchWorker(QRunnable):
     def __init__(self, auth_data, game_name):
         super().__init__()
         self.auth_data = auth_data
@@ -94,7 +94,7 @@ class IGDBGameSearchWorker(QRunnable):
             self.signals.finished.emit()
 
 
-class IGDBImageDownloadWorker(QRunnable):
+class LegacyIGDBImageDownloadWorker(QRunnable):
     def __init__(self, auth_data, game_data, destination_folder):
         super().__init__()
         self.auth_data = auth_data
@@ -139,7 +139,7 @@ class IGDBImageDownloadWorker(QRunnable):
                         retry_count += 1
                         if retry_count >= max_retries:
                             raise
-                        time.sleep(1)  # Wait before retrying
+                        time.sleep(1)
             except requests.exceptions.RequestException as e:
                 self.signals.search_failed.emit(f"Failed to download image: {str(e)}")
                 return
@@ -194,7 +194,7 @@ class IGDBImageDownloadWorker(QRunnable):
             self.signals.finished.emit()
 
 
-class APITestWorker(QRunnable):
+class LegacyAPITestWorker(QRunnable):
     def __init__(self, auth_data):
         super().__init__()
         self.auth_data = auth_data
@@ -223,5 +223,147 @@ class APITestWorker(QRunnable):
         
         except Exception as e:
             self.signals.auth_failed.emit(f"API connection failed: {str(e)}")
+        finally:
+            self.signals.finished.emit()
+
+
+class IGDBGameSearchWorker(QRunnable):
+    def __init__(self, game_name):
+        super().__init__()
+        self.game_name = game_name
+        self.signals = WorkerSignals()
+    
+    def run(self):
+        try:
+            url = "https://ambidex-igdb.netlify.app/api/igdb"
+            
+            params = {'search': self.game_name}
+            
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            
+            games = response.json()
+            
+            if isinstance(games, dict) and 'error' in games:
+                self.signals.search_failed.emit(f"API error: {games['error']}")
+                return
+            
+            for game in games:
+                if "cover" in game and "image_id" in game["cover"]:
+                    thumb_url = f"https://images.igdb.com/igdb/image/upload/t_micro/{game['cover']['image_id']}.jpg"
+                    try:
+                        thumb_response = requests.get(thumb_url, timeout=10)
+                        if thumb_response.ok:
+                            game["thumb_data"] = thumb_response.content
+                    except Exception:
+                        pass
+            
+            self.signals.search_complete.emit(games)
+            
+        except requests.exceptions.RequestException as e:
+            self.signals.search_failed.emit(f"Game search failed: {str(e)}")
+        except ValueError as e:
+            self.signals.search_failed.emit(f"Invalid response from server: {str(e)}")
+        except Exception as e:
+            self.signals.search_failed.emit(f"Game search failed: {str(e)}")
+        finally:
+            self.signals.finished.emit()
+
+
+class IGDBImageDownloadWorker(QRunnable):
+    def __init__(self, game_data, destination_folder):
+        super().__init__()
+        self.game_data = game_data
+        self.destination_folder = destination_folder
+        self.signals = WorkerSignals()
+    
+    def make_safe_filename(self, name):
+        safe_name = name.lower().replace(" ", "_")
+        for char in [':', '/', '\\', '*', '?', '"', '<', '>', '|', '.']:
+            safe_name = safe_name.replace(char, "_")
+        safe_name = ''.join(c for c in safe_name if c.isalnum() or c in ['_', '-'])
+        return safe_name
+    
+    def run(self):
+        try:
+            if not self.game_data:
+                self.signals.search_failed.emit("No game data available")
+                return
+            
+            if "cover" not in self.game_data or not self.game_data["cover"]:
+                self.signals.search_failed.emit("No cover image available")
+                return
+                
+            cover_data = self.game_data["cover"]
+            if "image_id" not in cover_data:
+                self.signals.search_failed.emit("Cover image ID not found")
+                return
+                
+            image_id = cover_data["image_id"]
+            image_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{image_id}.jpg"
+            
+            try:
+                max_retries = 3
+                retry_count = 0
+                while retry_count < max_retries:
+                    try:
+                        response = requests.get(image_url, timeout=15)  
+                        response.raise_for_status()
+                        break
+                    except requests.exceptions.RequestException as e:
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            raise
+                        time.sleep(1)
+            except requests.exceptions.RequestException as e:
+                self.signals.search_failed.emit(f"Failed to download image: {str(e)}")
+                return
+            
+            try:
+                os.makedirs(self.destination_folder, exist_ok=True)
+            except OSError as e:
+                self.signals.search_failed.emit(f"Failed to create image directory: {str(e)}")
+                return
+            
+            try:
+                safe_name = self.make_safe_filename(self.game_data["name"])
+                file_path = os.path.join(self.destination_folder, f"{safe_name}.jpg")
+                
+                if len(response.content) < 100:  
+                    self.signals.search_failed.emit("Downloaded image is too small or empty")
+                    return
+                
+                temp_path = file_path + ".tmp"
+                with open(temp_path, 'wb') as f:
+                    f.write(response.content)
+                
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+                os.rename(temp_path, file_path)
+                
+                if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                    self.signals.search_failed.emit("Failed to save image file")
+                    return
+                
+                try:
+                    from PySide6.QtGui import QImageReader
+                    reader = QImageReader(file_path)
+                    if not reader.canRead():
+                        os.unlink(file_path)  
+                        self.signals.search_failed.emit("Downloaded file is not a valid image")
+                        return
+                except Exception:
+                    pass
+                
+                self.signals.image_downloaded.emit(self.game_data["name"], file_path, self.game_data["name"])
+            except IOError as e:
+                self.signals.search_failed.emit(f"Failed to save image: {str(e)}")
+                return
+            except Exception as e:
+                self.signals.search_failed.emit(f"Error processing image: {str(e)}")
+                return
+            
+        except Exception as e:
+            self.signals.search_failed.emit(f"Image download failed: {str(e)}")
         finally:
             self.signals.finished.emit()

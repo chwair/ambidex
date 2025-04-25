@@ -18,7 +18,9 @@ from ui import (
     FlowLayout, DraggableWidget, GameNameSuggestionDialog, 
     BackupItemDelegate, LoadingDialog
 )
-from workers import IGDBImageDownloadWorker
+from workers import (
+    IGDBGameSearchWorker, IGDBImageDownloadWorker
+)
 import utils
 
 
@@ -49,9 +51,6 @@ class GameSaveBackup(QMainWindow):
             self.config["backup_dir"] = os.path.join(self.app_dir, "backups")
         
         os.makedirs(self.config["backup_dir"], exist_ok=True)
-        
-        if not os.path.exists(self.config_file):
-            self.show_first_run_dialog()
             
         self.save_config()
         
@@ -62,22 +61,22 @@ class GameSaveBackup(QMainWindow):
         self.init_ui()
         
     
-    def show_first_run_dialog(self):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Welcome to Ambidex!")
+    # def show_first_run_dialog(self):
+    #     msg_box = QMessageBox(self)
+    #     msg_box.setWindowTitle("Welcome to Ambidex!")
         
-        welcome_text = "<h2>Welcome to Ambidex!</h2>"
-        question_text = "Would you like to enable IGDB integration to automatically fetch game covers and metadata?\n\n" \
-                        "This requires a free Twitch account and API key."
+    #     welcome_text = "<h2>Welcome to Ambidex!</h2>"
+    #     question_text = "Would you like to enable IGDB integration to automatically fetch game covers and metadata?\n\n" \
+    #                     "This requires a free Twitch account and API key."
         
-        msg_box.setText(welcome_text + question_text)
-        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg_box.setDefaultButton(QMessageBox.Yes)
+    #     msg_box.setText(welcome_text + question_text)
+    #     msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+    #     msg_box.setDefaultButton(QMessageBox.Yes)
         
-        reply = msg_box.exec()
+    #     reply = msg_box.exec()
         
-        if reply == QMessageBox.Yes:
-            self.show_api_setup()
+    #     if reply == QMessageBox.Yes:
+    #         self.show_api_setup()
 
     def init_ui(self):
         self.tabs = QTabWidget()
@@ -98,8 +97,30 @@ class GameSaveBackup(QMainWindow):
         
         settings_menu = menu_bar.addMenu("Settings")
         
-        api_setup_action = settings_menu.addAction("IGDB API Setup")
-        api_setup_action.triggered.connect(self.show_api_setup)
+        api_source_menu = settings_menu.addMenu("IGDB API Source")
+        
+        self.ambidex_api_action = api_source_menu.addAction("Ambidex IGDB API")
+        self.ambidex_api_action.setCheckable(True)
+        self.ambidex_api_action.triggered.connect(lambda checked: self.set_igdb_api_source("ambidex"))
+        
+        self.legacy_api_action = api_source_menu.addAction("Custom Twitch IGDB API")
+        self.legacy_api_action.setCheckable(True) 
+        self.legacy_api_action.triggered.connect(lambda checked: self.set_igdb_api_source("legacy"))
+        
+        api_source = self.config.get("igdb_api_source", "ambidex")
+        self.ambidex_api_action.setChecked(api_source == "ambidex")
+        self.legacy_api_action.setChecked(api_source == "legacy")
+        
+        
+        self.api_setup_action = settings_menu.addAction("Custom IGDB API Setup")
+        self.api_setup_action.triggered.connect(self.show_api_setup)
+        
+        api_source = self.config.get("igdb_api_source", "ambidex")
+        self.api_setup_action.setEnabled(api_source == "legacy")
+        
+        self.ambidex_api_action.triggered.connect(lambda: self.api_setup_action.setEnabled(False))
+        self.legacy_api_action.triggered.connect(lambda: self.api_setup_action.setEnabled(True))
+
         
         backup_dir_action = settings_menu.addAction("Set Backup Directory")
         backup_dir_action.triggered.connect(self.set_backup_directory)
@@ -586,38 +607,113 @@ class GameSaveBackup(QMainWindow):
         if not game_name:
             return
         
-        official_name = game_name
-        igdb_game_data = None
+        self.game_name_from_search = game_name
         
-        loading_dialog = LoadingDialog(self, f"Searching for data for '{game_name}'")
+        loading_dialog = LoadingDialog(self, f"Searching for: '{game_name}'...")
         loading_dialog.center_on_parent()
         loading_dialog.show()
         QApplication.processEvents()
         
-        if self.config.get("igdb_auth"):
-            search_dialog = GameSearchDialog(self, self.config["igdb_auth"], game_name)
+        igdb_api = utils.get_igdb_api_source(self.config)
+        
+        try:
+            if (igdb_api["needs_auth"]):
+                if not self.config.get("igdb_auth"):
+                    logger.error("Legacy API selected but no auth data available")
+                    loading_dialog.close()
+                    self.continue_add_game_save(game_name, None)
+                    return
+                    
+                worker = igdb_api["search_worker"](self.config["igdb_auth"], game_name)
+            else:
+                worker = igdb_api["search_worker"](game_name)
+                
+            worker.signals.search_complete.connect(self.on_custom_game_search_complete)
+            worker.signals.search_failed.connect(lambda msg: self.on_custom_game_search_failed(msg, loading_dialog))
+            worker.signals.finished.connect(loading_dialog.close)
+            
+            self.current_worker = worker
+            
+            self.threadpool.start(worker)
+        except Exception as e:
+            logger.error(f"Error using IGDB backend: {str(e)}")
             loading_dialog.close()
-            if search_dialog.exec() == QDialog.Accepted and search_dialog.selected_game:
+            
+            self.continue_add_game_save(game_name, None)
+
+    def on_custom_game_search_complete(self, games):
+        if not hasattr(self, 'current_worker'):
+            return
+            
+        self.current_worker = None
+        
+        if not games:
+            QMessageBox.information(self, "No Metadata Found", 
+                                  "No game metadata was found. Continuing with the provided game name.")
+            
+            if hasattr(self, 'game_name_from_search'):
+                custom_name = self.game_name_from_search
+                delattr(self, 'game_name_from_search')
+                self.continue_add_game_save(custom_name, None)
+            return
+            
+        if not hasattr(self, 'game_name_from_search'):
+            return
+            
+        custom_name = self.game_name_from_search
+        
+        search_dialog = GameSearchDialog(self, None, custom_name, games=games, allow_custom_name=True)
+        
+        if search_dialog.exec() == QDialog.Accepted:
+            if search_dialog.use_custom_name:
+                self.continue_add_game_save(custom_name, None)
+            elif search_dialog.selected_game:
                 igdb_game_data = search_dialog.selected_game
                 official_name = igdb_game_data["name"]
-                game_name = official_name
-                
-                loading_dialog = LoadingDialog(self, f"Fetching save locations for '{game_name}'")
-                loading_dialog.center_on_parent()
-                loading_dialog.show()
+                self.continue_add_game_save(official_name, igdb_game_data)
             else:
-                return
+                self.continue_add_game_save(custom_name, None)
+        else:
+            self.continue_add_game_save(custom_name, None)
+            
+        if hasattr(self, 'game_name_from_search'):
+            delattr(self, 'game_name_from_search')
+    
+    def on_custom_game_search_failed(self, error_msg, loading_dialog=None):
+        logger.error(f"Custom IGDB search failed: {error_msg}")
+        
+        if loading_dialog and loading_dialog.isVisible():
+            loading_dialog.close()
+        
+        if hasattr(self, 'game_name_from_search'):
+            custom_name = self.game_name_from_search
+            delattr(self, 'game_name_from_search')
+            
+            QMessageBox.warning(self, "Metadata Search Failed", 
+                              f"Failed to search for game metadata: {error_msg}\n\nContinuing with the provided game name.")
+            
+            self.continue_add_game_save(custom_name, None)
+        
+        if hasattr(self, 'current_worker'):
+            self.current_worker = None
+    
+    def continue_add_game_save(self, game_name, igdb_game_data):
+        loading_dialog = LoadingDialog(self, f"Fetching save locations for '{game_name}'")
+        loading_dialog.center_on_parent()
+        loading_dialog.show()
+        QApplication.processEvents()
         
         try:
             loading_dialog.set_detail("Checking PCGamingWiki for save locations...")
             QApplication.processEvents()
             suggested_paths = utils.fetch_pcgamingwiki_save_locations(game_name)
         except Exception as e:
+            logger.error(f"PCGamingWiki error: {str(e)}")
             suggested_paths = {}
         finally:
             loading_dialog.close()
         
-        dialog = SaveSelectionDialog(self, game_name, self.config.get("igdb_auth"), suggested_paths)
+        dialog = SaveSelectionDialog(self, game_name, None, suggested_paths)
         if dialog.exec() != QDialog.Accepted:
             return
         
@@ -657,16 +753,62 @@ class GameSaveBackup(QMainWindow):
         
         self.save_config()
         
-        if igdb_game_data:
+        if igdb_game_data and "cover" in igdb_game_data and "image_id" in igdb_game_data["cover"]:
             self.current_game_data = igdb_game_data
-            self.download_game_cover(igdb_game_data, is_new_game=True)
-        elif self.config.get("igdb_auth"):
-            self.fetch_game_metadata(game_name, is_new_game=True)
+            self.download_cover_custom(igdb_game_data)
         else:
             self.finalize_game_addition(None, None)
             
         self.load_games()
         self.update_games_list()
+        
+    def download_cover_custom(self, game_data):
+        try:
+            if not game_data or not isinstance(game_data, dict):
+                self.finalize_game_addition(None, None)
+                return
+                
+            if "cover" not in game_data or not game_data["cover"] or "image_id" not in game_data["cover"]:
+                self.finalize_game_addition(None, None)
+                return
+            
+            images_dir = os.path.join(self.app_dir, "images")
+            try:
+                os.makedirs(images_dir, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Failed to create images directory: {e}")
+                self.finalize_game_addition(None, None)
+                return
+                
+            safe_name = utils.make_safe_filename(game_data["name"])
+            expected_image_path = os.path.join(images_dir, f"{safe_name}.jpg")
+            
+            igdb_api = utils.get_igdb_api_source(self.config)
+            
+            if igdb_api["needs_auth"]:
+                if not self.config.get("igdb_auth"):
+                    logger.error("Legacy API selected but no auth data available")
+                    worker = IGDBImageDownloadWorker(game_data, images_dir)
+                else:
+                    worker = igdb_api["image_worker"](self.config["igdb_auth"], game_data, images_dir)
+            else:
+                worker = igdb_api["image_worker"](game_data, images_dir)
+            
+            self.current_worker = worker
+            
+            worker.signals.image_downloaded.connect(
+                lambda name, path, official_name: self.finalize_game_addition(path, official_name))
+            
+            worker.signals.search_failed.connect(
+                lambda msg: self.handle_image_download_failure(msg, True))
+            
+            worker.signals.finished.connect(
+                lambda: self.image_download_finished(True, expected_image_path))
+            
+            self.threadpool.start(worker)
+        except Exception as e:
+            logger.error(f"Error in download_cover_custom: {str(e)}")
+            self.finalize_game_addition(None, None)
 
     def fetch_game_metadata(self, game_name, is_new_game=False):
         if not self.config.get("igdb_auth"):
@@ -678,17 +820,14 @@ class GameSaveBackup(QMainWindow):
         
         if search_dialog.exec() == QDialog.Accepted and search_dialog.selected_game:
             logger.info(f"Selected game metadata for: {game_name}")
-            # prevent garbage collection to avoid bugs with nuitka
             self.current_game_data = search_dialog.selected_game
             
             if not is_new_game:
                 try:
-                    # prevent threading issues
                     logger.info(f"Downloading cover for existing game: {game_name}")
                     self.download_game_cover(search_dialog.selected_game, is_new_game=False, game_name=game_name)
                 except Exception as e:
                     logger.error(f"Error downloading cover: {str(e)}")
-                    # update metadata regardless of download success
                     if game_name in self.config["games"] and "thumb_data" in search_dialog.selected_game:
                         try:
                             self.config["games"][game_name]["thumb_data"] = base64.b64encode(
@@ -737,11 +876,9 @@ class GameSaveBackup(QMainWindow):
             
             worker = IGDBImageDownloadWorker(self.config["igdb_auth"], game_data, images_dir)
             
-            # store worker reference to prevent garbage collection issues in nuitka builds
             self.current_worker = worker
             
             if is_new_game:
-                # use a stable lambda to prevent issues in builds
                 worker.signals.image_downloaded.connect(
                     lambda name, path, official_name: self.finalize_game_addition(path, official_name))
             else:
@@ -764,7 +901,6 @@ class GameSaveBackup(QMainWindow):
                 QMessageBox.warning(self, "Error", f"An unexpected error occurred: {str(e)}")
 
     def image_download_finished(self, is_new_game=False, expected_image_path=None):
-        """handle cleanup after image download regardless of success or failure"""
         try:
             if is_new_game and hasattr(self, "current_game_addition") and self.current_game_addition:
                 if not hasattr(self, "current_game_data") or not self.current_game_data:
@@ -795,7 +931,6 @@ class GameSaveBackup(QMainWindow):
             logger.info(f"Image downloaded for {game_name}, path: {image_path}")
             
             if game_name in self.config["games"]:
-                # Make sure we use absolute path to avoid issues in Nuitka build
                 if image_path:
                     abs_image_path = os.path.abspath(os.path.normpath(image_path))
                     if os.path.exists(abs_image_path):
@@ -803,7 +938,6 @@ class GameSaveBackup(QMainWindow):
                         self.config["games"][game_name]["image"] = abs_image_path
                     else:
                         logger.error(f"Image path doesn't exist: {abs_image_path}")
-                        # Try fallback to expected path
                         images_dir = os.path.join(self.app_dir, "images")
                         safe_name = utils.make_safe_filename(game_name)
                         expected_path = os.path.join(images_dir, f"{safe_name}.jpg")
@@ -811,7 +945,6 @@ class GameSaveBackup(QMainWindow):
                             logger.info(f"Using fallback image path: {expected_path}")
                             self.config["games"][game_name]["image"] = expected_path
                 
-                # Set thumbnail data if available
                 if hasattr(self, "current_game_data") and self.current_game_data:
                     if "thumb_data" in self.current_game_data and self.current_game_data["thumb_data"]:
                         try:
@@ -821,18 +954,15 @@ class GameSaveBackup(QMainWindow):
                         except Exception as e:
                             logger.error(f"Error setting thumb data: {str(e)}")
                 
-                # Handle game renaming
                 if official_name and official_name != game_name:
                     logger.info(f"Game name changed from {game_name} to {official_name}")
                     if official_name not in self.config["games"]:
                         self.config["games"][official_name] = self.config["games"][game_name].copy()
                         del self.config["games"][game_name]
                         
-                        # Notify user about the rename
                         QMessageBox.information(self, "Game Renamed", 
                                               f"Game has been renamed from '{game_name}' to '{official_name}'.")
                 
-                # Save configuration and update UI
                 try:
                     logger.info("Saving config after metadata update")
                     self.save_config()
@@ -846,12 +976,10 @@ class GameSaveBackup(QMainWindow):
                 except Exception as e:
                     logger.error(f"Error updating UI: {str(e)}")
                 
-                # Clean up worker reference
                 if hasattr(self, "current_worker"):
                     logger.info("Cleaning up worker reference")
                     self.current_worker = None
                 
-                # Clean up game data reference
                 if hasattr(self, "current_game_data"):
                     logger.info("Cleaning up game data reference")
                     delattr(self, "current_game_data")
@@ -860,7 +988,6 @@ class GameSaveBackup(QMainWindow):
                                     f"Cover image for '{official_name or game_name}' has been downloaded.")
         except Exception as e:
             logger.error(f"Uncaught error in on_image_downloaded: {str(e)}")
-            # Fallback to ensure config is saved
             try:
                 self.save_config()
                 self.load_games()
@@ -877,7 +1004,6 @@ class GameSaveBackup(QMainWindow):
                 logger.error(f"Error in on_image_downloaded fallback: {str(e2)}")
     
     def finalize_game_addition(self, image_path, official_name):
-        """complete the game addition process after metadata and image are retrieved"""
         try:
             if not self.current_game_addition:
                 logger.error("No current_game_addition available in finalize_game_addition")
@@ -890,13 +1016,11 @@ class GameSaveBackup(QMainWindow):
                 logger.info(f"Game name changed from {self.current_game_addition['name']} to {official_name}")
                 if self.current_game_addition["name"] in self.config["games"]:
                     if game_name in self.config["games"]:
-                        # merge games with the same name
                         logger.info(f"Merging game data for {game_name}")
                         for path in self.config["games"][self.current_game_addition["name"]]["save_paths"]:
                             if path not in self.config["games"][game_name]["save_paths"]:
                                 self.config["games"][game_name]["save_paths"].append(path)
                         
-                        # Merge backups if they exist
                         if "backups" in self.config["games"][self.current_game_addition["name"]]:
                             if "backups" not in self.config["games"][game_name]:
                                 self.config["games"][game_name]["backups"] = []
@@ -905,25 +1029,21 @@ class GameSaveBackup(QMainWindow):
                                 self.config["games"][self.current_game_addition["name"]]["backups"]
                             )
                         
-                        # delete the old one
                         del self.config["games"][self.current_game_addition["name"]]
                     else:
                         logger.info(f"Renaming game from {self.current_game_addition['name']} to {game_name}")
                         self.config["games"][game_name] = self.config["games"][self.current_game_addition["name"]]
                         del self.config["games"][self.current_game_addition["name"]]
             
-            # Handle image path
             if image_path and game_name in self.config["games"]:
                 try:
                     logger.info(f"Checking image path: {image_path}")
-                    # Use absolute paths to prevent issues in Nuitka build
                     abs_image_path = os.path.abspath(os.path.normpath(image_path))
                     if os.path.exists(abs_image_path):
                         logger.info(f"Setting image path to: {abs_image_path}")
                         self.config["games"][game_name]["image"] = abs_image_path
                     else:
                         logger.error(f"Image path does not exist: {abs_image_path}")
-                        # Try to find the image in the images directory as fallback
                         try:
                             images_dir = os.path.join(self.app_dir, "images")
                             safe_name = utils.make_safe_filename(game_name)
@@ -936,7 +1056,6 @@ class GameSaveBackup(QMainWindow):
                 except Exception as e:
                     logger.error(f"Error checking image path: {str(e)}")
             
-            # Set thumbnail data if available
             if hasattr(self, "current_game_data") and self.current_game_data and game_name in self.config["games"]:
                 if "thumb_data" in self.current_game_data and self.current_game_data["thumb_data"]:
                     try:
@@ -946,14 +1065,12 @@ class GameSaveBackup(QMainWindow):
                     except Exception as e:
                         logger.error(f"Error setting thumb data: {str(e)}")
             
-            # Save configuration file
             try:
                 logger.info("Saving config after finalizing game addition")
                 self.save_config()
             except Exception as e:
                 logger.error(f"Error saving config during finalize: {str(e)}")
             
-            # Update UI
             try:
                 logger.info("Updating UI after finalizing game addition")
                 self.load_games()
@@ -961,11 +1078,9 @@ class GameSaveBackup(QMainWindow):
             except Exception as e:
                 logger.error(f"Error updating UI during finalize: {str(e)}")
             
-            # Clear current game data to prevent any more callbacks
             logger.info("Clearing temporary data")
             self.current_game_addition = None
             
-            # Handle worker cleanup
             if hasattr(self, "current_worker"):
                 logger.info("Cleaning up worker reference")
                 self.current_worker = None
@@ -978,7 +1093,6 @@ class GameSaveBackup(QMainWindow):
                                    f"Game '{game_name}' has been added successfully.")
         except Exception as e:
             logger.error(f"Uncaught exception in finalize_game_addition: {str(e)}")
-            # Final fallback to ensure UI is updated
             self.current_game_addition = None
             if hasattr(self, "current_worker"):
                 self.current_worker = None
@@ -1032,6 +1146,7 @@ class GameSaveBackup(QMainWindow):
         rename_action = context_menu.addAction("Rename Game")
         edit_paths_action = context_menu.addAction("Edit Save Paths")
         fetch_metadata_action = context_menu.addAction("Fetch Metadata")
+        custom_image_action = context_menu.addAction("Add Custom Image")
         
         open_menu = QMenu("Open Location", self)
         context_menu.addMenu(open_menu)
@@ -1061,6 +1176,8 @@ class GameSaveBackup(QMainWindow):
             self.edit_game_paths(game_name)
         elif action == fetch_metadata_action:
             self.fetch_game_metadata(game_name)
+        elif action == custom_image_action:
+            self.add_custom_image(game_name)
         elif action == open_backup_action:
             self.open_backup_directory(game_name)
         elif action in save_path_actions:
@@ -1070,7 +1187,6 @@ class GameSaveBackup(QMainWindow):
             self.delete_game(game_name)
 
     def open_save_path(self, path):
-        """open a save path in the file explorer"""
         if not path or not os.path.exists(path):
             QMessageBox.warning(self, "Path Not Found", f"The path does not exist:\n{path}")
             return
@@ -1263,6 +1379,69 @@ class GameSaveBackup(QMainWindow):
         
         QMessageBox.information(self, "Restore Complete", f"Save files for {game_name} have been restored successfully!")
 
+    def set_igdb_api_source(self, source, force=False):
+        if source not in ["ambidex", "legacy"]:
+            return
+            
+        if source == "legacy" and not self.config.get("igdb_auth") and not force:
+            reply = QMessageBox.question(
+                self,
+                "IGDB API Setup Required",
+                "Using the Legacy Twitch IGDB API requires setup with your Twitch Developer credentials.\n\n"
+                "Would you like to set up your Twitch IGDB API credentials now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.show_api_setup(lambda: self.set_igdb_api_source("legacy"))
+                return
+            else:
+                self.ambidex_api_action.setChecked(False)
+                self.set_igdb_api_source("legacy", force=True)
+                self.legacy_api_action.setChecked(True)
+                return
+                
+        self.config["igdb_api_source"] = source
+        self.save_config()
+        
+        self.ambidex_api_action.setChecked(source == "ambidex")
+        self.legacy_api_action.setChecked(source == "legacy")
+
+    def add_custom_image(self, game_name):
+        if game_name not in self.config["games"]:
+            return
+            
+        file_dialog = QFileDialog()
+        image_file, _ = file_dialog.getOpenFileName(
+            self,
+            "Select Image File",
+            "",
+            "Image Files (*.jpg *.jpeg *.png *.webp *.bmp)"
+        )
+        
+        if not image_file or not os.path.exists(image_file):
+            return
+            
+        images_dir = os.path.join(self.app_dir, "images")
+        try:
+            os.makedirs(images_dir, exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create images directory: {e}")
+            return
+            
+        safe_name = utils.make_safe_filename(game_name)
+        file_ext = os.path.splitext(image_file)[1].lower()
+        dest_file = os.path.join(images_dir, f"{safe_name}{file_ext}")
+        
+        try:
+            shutil.copy2(image_file, dest_file)
+            self.config["games"][game_name]["image"] = dest_file
+            self.save_config()
+            self.load_games()
+            QMessageBox.information(self, "Image Added", f"Custom image for '{game_name}' has been added.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to copy image: {e}")
 
 def main():
     app = QApplication(sys.argv)

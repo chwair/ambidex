@@ -19,7 +19,7 @@ def build():
         "--clang",
         "--output-dir=build",
         "--include-module=ui",
-        "--include-module=utils",  
+        "--include-module=utils",
         "--include-module=workers",  
         "--enable-plugin=pyside6",  
         "--follow-imports",

@@ -218,3 +218,22 @@ def extract_between_tags(text, start_tag, end_tag):
         current_pos = end_pos + end_len
         
     return result
+
+def get_igdb_api_source(config):
+    api_source = config.get("igdb_api_source", "ambidex")
+    
+    if api_source == "legacy" and config.get("igdb_auth"):
+        from workers import LegacyIGDBGameSearchWorker, LegacyIGDBImageDownloadWorker
+        return {
+            "search_worker": LegacyIGDBGameSearchWorker,
+            "image_worker": LegacyIGDBImageDownloadWorker,
+            "needs_auth": True
+        }
+    else:
+        # Always default to Ambidex API if legacy auth is missing
+        from workers import IGDBGameSearchWorker, IGDBImageDownloadWorker
+        return {
+            "search_worker": IGDBGameSearchWorker,
+            "image_worker": IGDBImageDownloadWorker,
+            "needs_auth": False
+        }
