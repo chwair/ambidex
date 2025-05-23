@@ -6,6 +6,8 @@ import subprocess
 import sys
 import ctypes
 from ctypes import wintypes
+import platform
+import winreg
 
 
 def make_safe_filename(name):
@@ -142,13 +144,31 @@ def fetch_pcgamingwiki_save_locations(game_name):
         row_pattern = r'<th\s+scope="row"\s+class="table-gamedata-body-system">(.*?)</th>\s*?<td\s+class="table-gamedata-body-location"><span[^>]*>(.*?)</span></td>'
         store_rows = re.findall(row_pattern, html_content, re.DOTALL)
         
+        split_rows = []
+
         for row in store_rows:
             store_type = row[0].strip()
             path_html = row[1]
-            
-            # clean up the path - remove HTML tags
-            path = re.sub(r'<[^>]*>', '', path_html)
-            path = path.strip()
+
+            # split the path_html by <br> tags
+            path_html_parts = re.split(r'<br\s*/?>', path_html)
+            if len(path_html_parts) > 1:
+                for index, part in enumerate(path_html_parts):
+                    # clean up the path - remove HTML tags
+                    path = re.sub(r'<[^>]*>', '', part)
+                    path = path.strip()
+                    split_rows.append((f"{store_type} [{str(index + 1)}]", path))
+            else:
+                # clean up the path - remove HTML tags
+                path = re.sub(r'<[^>]*>', '', path_html)
+                path = path.strip()
+                split_rows.append((store_type, path))
+
+        print(split_rows)
+
+        for row in split_rows:
+            store_type = row[0].strip()
+            path = row[1]
             
             # normalize backslashes for Windows paths
             path = re.sub(r'\\+', '\\\\', path)
@@ -183,8 +203,9 @@ def fetch_pcgamingwiki_save_locations(game_name):
                     path = path.replace('%PROGRAMDATA%', programdata)
             except Exception as e:
                 print(f"Error expanding environment variables: {e}")
-            
             save_locations[store_type] = path
+            print(f"Store Type: {store_type}, Path: {path}")
+            print(save_locations)
         
         return save_locations
         
@@ -237,3 +258,45 @@ def get_igdb_api_source(config):
             "image_worker": IGDBImageDownloadWorker,
             "needs_auth": False
         }
+
+def get_windows_accent_color():
+    """
+    Tries to get the Windows accent color.
+    Returns a hex color string (e.g., "#RRGGBB") or a default blue if not found/not on Windows.
+    """
+    if platform.system() == "Windows":
+        try:
+            # The DWM AccentColor is an ABGR value (alpha, blue, green, red)
+            # e.g., 0xAABBGGRR
+            key_path = r"Software\\Microsoft\\Windows\\DWM"
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path)
+            accent_color_dword, _ = winreg.QueryValueEx(key, "AccentColor")
+            winreg.CloseKey(key)
+            
+            # Extract R, G, B components
+            # alpha = (accent_color_dword >> 24) & 0xFF
+            blue  = (accent_color_dword >> 16) & 0xFF
+            green = (accent_color_dword >> 8) & 0xFF
+            red   = accent_color_dword & 0xFF
+            return f"#{red:02x}{green:02x}{blue:02x}"
+        except Exception:
+            # Fallback if registry access fails or key/value not found
+            pass
+    return "#0078D4" # Default blue for non-Windows or if detection fails
+
+def is_windows_11_or_later():
+    """
+    Checks if the current OS is Windows 11 or later based on the build number.
+    """
+    if platform.system() == "Windows":
+        try:
+            # platform.version() gives something like '10.0.22621' for Win11
+            # Windows 11 official release build is 22000
+            version_parts = platform.version().split('.')
+            if len(version_parts) >= 3:
+                build_number = int(version_parts[2])
+                return build_number >= 22000
+        except (ValueError, IndexError):
+            # Could not parse version string
+            pass
+    return False

@@ -3,6 +3,7 @@ import requests
 import time
 from PySide6.QtCore import QObject, QRunnable, Signal
 
+
 class WorkerSignals(QObject):
     auth_complete = Signal(dict)
     auth_failed = Signal(str)

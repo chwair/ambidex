@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QThreadPool
 from ui import (
     IGDBSetupDialog, GameSearchDialog, SaveSelectionDialog,
     FlowLayout, DraggableWidget, GameNameSuggestionDialog, 
-    BackupItemDelegate, LoadingDialog
+    BackupItemDelegate, LoadingDialog, Toast, ToastManager, ProgressDialog
 )
 from workers import (
     IGDBGameSearchWorker, IGDBImageDownloadWorker
@@ -57,6 +57,8 @@ class GameSaveBackup(QMainWindow):
         self.current_game_addition = None
         
         self.threadpool = QThreadPool.globalInstance()
+        
+        self.toast_manager = ToastManager(self)
         
         self.init_ui()
         
@@ -165,7 +167,6 @@ class GameSaveBackup(QMainWindow):
         for game_name, game_data in self.config.get("games", {}).items():
             game_widget = self.create_game_widget(game_name, game_data)
             self.game_grid.addWidget(game_widget)
-            
     def backup_game(self, game_name, show_message=True, label="", color=None):
         game_data = self.config["games"].get(game_name)
         if not game_data:
@@ -180,12 +181,10 @@ class GameSaveBackup(QMainWindow):
         try:
             os.makedirs(backup_base, exist_ok=True)
         except Exception as e:
-            QMessageBox.critical(
-                self, 
-                "Base Backup Directory Error", 
-                f"Could not access or create base backup directory: {e}\n\n"
-                f"Path: {backup_base}\n\n"
-                "Please set a valid backup directory from Settings menu."
+            self.toast_manager.show_toast(
+                f"Could not create backup directory: {e}", 
+                icon_type="error",
+                duration=5000
             )
             return
             
@@ -194,14 +193,18 @@ class GameSaveBackup(QMainWindow):
         try:
             os.makedirs(backup_dir, exist_ok=True)
         except Exception as e:
-            QMessageBox.critical(
-                self, 
-                "Backup Directory Error", 
-                f"Could not create backup directory: {e}\n\n"
-                f"Path: {backup_dir}\n\n"
-                "Please check file permissions or set a different backup directory."
+            self.toast_manager.show_toast(
+                f"Could not create backup directory: {e}", 
+                icon_type="error",
+                duration=5000
             )
             return
+        
+        # Show progress dialog
+        progress = ProgressDialog(self, f"Backing up: {game_name}")
+        progress.center_on_parent()
+        progress.show()
+        QApplication.processEvents()
         
         parent_dir = game_data.get("parent_dir", "")
         if parent_dir:
@@ -212,11 +215,22 @@ class GameSaveBackup(QMainWindow):
                 print(f"Warning: Could not write parent_dir.txt: {e}")
         
         success = True
+        save_paths = game_data["save_paths"]
+        total_paths = len(save_paths)
+        progress.set_progress_range(0, total_paths)
         
-        for save_path in game_data["save_paths"]:
+        for idx, save_path in enumerate(save_paths):
             try:
+                progress.set_progress(idx)
+                progress.set_detail(f"Backing up {os.path.basename(save_path)}")
+                QApplication.processEvents()
+                
                 if not os.path.exists(save_path):
-                    QMessageBox.warning(self, "Path Not Found", f"Save path does not exist: {save_path}")
+                    self.toast_manager.show_toast(
+                        f"Path not found: {save_path}", 
+                        icon_type="warning",
+                        duration=4000
+                    )
                     success = False
                     continue
                 
@@ -236,9 +250,16 @@ class GameSaveBackup(QMainWindow):
                 else:
                     shutil.copy2(save_path, dest_path)
             except Exception as e:
-                QMessageBox.warning(self, "Backup Error", f"Error backing up {save_path}: {e}")
+                self.toast_manager.show_toast(
+                    f"Error backing up {os.path.basename(save_path)}: {str(e)[:50]}", 
+                    icon_type="error",
+                    duration=5000
+                )
                 success = False
                 continue
+        
+        progress.set_progress(total_paths)
+        progress.close()
         
         if success:
             backup_info = {
@@ -253,7 +274,10 @@ class GameSaveBackup(QMainWindow):
             self.save_config()
             
             if show_message:
-                QMessageBox.information(self, "Backup Complete", f"Save files for {game_name} have been backed up successfully!")
+                self.toast_manager.show_toast(
+                    f"Save files for {game_name} have been backed up successfully!", 
+                    icon_type="success"
+                )
             self.update_games_list()
         else:
             try:
@@ -261,10 +285,9 @@ class GameSaveBackup(QMainWindow):
                     shutil.rmtree(backup_dir)
             except Exception as e:
                 print(f"Warning: Could not clean up partial backup: {e}")
-    
     def backup_all_games(self):
         if not self.config["games"]:
-            QMessageBox.information(self, "No Games", "No games to backup.")
+            self.toast_manager.show_toast("No games to backup.", icon_type="info")
             return
             
         reply = QMessageBox.question(
@@ -276,9 +299,31 @@ class GameSaveBackup(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            for game_name in self.config["games"].keys():
+            game_names = list(self.config["games"].keys())
+            total_games = len(game_names)
+            
+            # Show main progress dialog
+            progress = ProgressDialog(self, f"Backing up {total_games} games")
+            progress.center_on_parent()
+            progress.set_progress_range(0, total_games)
+            progress.show()
+            QApplication.processEvents()
+            
+            for idx, game_name in enumerate(game_names):
+                progress.set_progress(idx)
+                progress.set_detail(f"Backing up: {game_name}")
+                QApplication.processEvents()
+                
+                # Use False for show_message to avoid showing individual toasts
                 self.backup_game(game_name, False)
-            QMessageBox.information(self, "Backup Complete", "All games have been backed up successfully!")
+            
+            progress.set_progress(total_games)
+            progress.close()
+            
+            self.toast_manager.show_toast(
+                f"All {total_games} games have been backed up successfully!", 
+                icon_type="success"
+            )
 
     def update_games_list(self):
         self.games_list.clear()
@@ -510,16 +555,28 @@ class GameSaveBackup(QMainWindow):
         widget.setMinimumWidth(140)
         widget.setMinimumHeight(200)
         widget.setMaximumWidth(180)
-        widget.setStyleSheet("""
-            #gameWidget {
+
+        default_hover_border_color = "#0078d4"  # Default blue
+        hover_border_color = default_hover_border_color
+        
+        # Check for Windows 11+ and try to get accent color
+        if utils.is_windows_11_or_later():
+            accent_color = utils.get_windows_accent_color()
+            if accent_color:
+                hover_border_color = accent_color
+            else: # Fallback if accent color is None (e.g., registry error)
+                hover_border_color = default_hover_border_color
+        
+        widget.setStyleSheet(f"""
+            #gameWidget {{
                 background-color: transparent;
                 border: 1px solid transparent;
-            }
-            #gameWidget:hover {
+            }}
+            #gameWidget:hover {{
                 background-color: rgba(200, 200, 200, 0.1);
-                border: 1px solid #0078d4;
+                border: 1px solid {hover_border_color};
                 border-radius: 4px;
-            }
+            }}
         """)
         
         layout = QVBoxLayout(widget)
@@ -678,7 +735,6 @@ class GameSaveBackup(QMainWindow):
             
         if hasattr(self, 'game_name_from_search'):
             delattr(self, 'game_name_from_search')
-    
     def on_custom_game_search_failed(self, error_msg, loading_dialog=None):
         logger.error(f"Custom IGDB search failed: {error_msg}")
         
@@ -698,15 +754,17 @@ class GameSaveBackup(QMainWindow):
             self.current_worker = None
     
     def continue_add_game_save(self, game_name, igdb_game_data):
-        loading_dialog = LoadingDialog(self, f"Fetching save locations for '{game_name}'")
+        loading_dialog = ProgressDialog(self, f"Fetching save locations for '{game_name}'")
         loading_dialog.center_on_parent()
         loading_dialog.show()
         QApplication.processEvents()
         
         try:
             loading_dialog.set_detail("Checking PCGamingWiki for save locations...")
+            loading_dialog.set_progress(30)
             QApplication.processEvents()
             suggested_paths = utils.fetch_pcgamingwiki_save_locations(game_name)
+            loading_dialog.set_progress(100)
         except Exception as e:
             logger.error(f"PCGamingWiki error: {str(e)}")
             suggested_paths = {}
@@ -722,6 +780,13 @@ class GameSaveBackup(QMainWindow):
         if not selected_paths:
             return
         
+        setup_progress = ProgressDialog(self, f"Setting up '{game_name}'")
+        setup_progress.center_on_parent()
+        setup_progress.set_progress_range(0, 100)
+        setup_progress.set_progress(10)
+        setup_progress.show()
+        QApplication.processEvents()
+        
         if len(selected_paths) == 1:
             if os.path.isdir(selected_paths[0]):
                 save_parent_dir = selected_paths[0]
@@ -731,6 +796,10 @@ class GameSaveBackup(QMainWindow):
             parent_dirs = [os.path.dirname(path) if not os.path.isdir(path) else path for path in selected_paths]
             common_parent = os.path.commonpath(parent_dirs)
             save_parent_dir = common_parent
+        
+        setup_progress.set_detail("Creating game configuration...")
+        setup_progress.set_progress(30)
+        QApplication.processEvents()
         
         self.current_game_addition = {
             "name": game_name,
@@ -753,10 +822,21 @@ class GameSaveBackup(QMainWindow):
         
         self.save_config()
         
+        setup_progress.set_detail("Updating game list...")
+        setup_progress.set_progress(60)
+        QApplication.processEvents()
+        
         if igdb_game_data and "cover" in igdb_game_data and "image_id" in igdb_game_data["cover"]:
+            setup_progress.set_detail("Downloading game cover image...")
+            setup_progress.set_progress(70)
+            QApplication.processEvents()
+            
             self.current_game_data = igdb_game_data
+            setup_progress.close()
             self.download_cover_custom(igdb_game_data)
         else:
+            setup_progress.set_progress(100)
+            setup_progress.close()
             self.finalize_game_addition(None, None)
             
         self.load_games()
@@ -979,13 +1059,15 @@ class GameSaveBackup(QMainWindow):
                 if hasattr(self, "current_worker"):
                     logger.info("Cleaning up worker reference")
                     self.current_worker = None
-                
+
                 if hasattr(self, "current_game_data"):
                     logger.info("Cleaning up game data reference")
                     delattr(self, "current_game_data")
                 
-                QMessageBox.information(self, "Image Downloaded", 
-                                    f"Cover image for '{official_name or game_name}' has been downloaded.")
+                self.toast_manager.show_toast(
+                    f"Cover image for '{official_name or game_name}' has been downloaded.",
+                    icon_type="success"
+                )
         except Exception as e:
             logger.error(f"Uncaught error in on_image_downloaded: {str(e)}")
             try:
@@ -1088,9 +1170,10 @@ class GameSaveBackup(QMainWindow):
             if hasattr(self, "current_game_data"):
                 logger.info("Cleaning up game data reference")
                 delattr(self, "current_game_data")
-            
-            QMessageBox.information(self, "Game Added", 
-                                   f"Game '{game_name}' has been added successfully.")
+                self.toast_manager.show_toast(
+                f"Game '{game_name}' has been added successfully.", 
+                icon_type="success"
+            )
         except Exception as e:
             logger.error(f"Uncaught exception in finalize_game_addition: {str(e)}")
             self.current_game_addition = None
@@ -1098,7 +1181,10 @@ class GameSaveBackup(QMainWindow):
                 self.current_worker = None
             if hasattr(self, "current_game_data"):
                 delattr(self, "current_game_data")
-            QMessageBox.information(self, "Game Added", "Game has been added.")
+            self.toast_manager.show_toast(
+                "Game has been added.", 
+                icon_type="success"
+            )
             try:
                 self.load_games()
                 self.update_games_list()
@@ -1284,7 +1370,6 @@ class GameSaveBackup(QMainWindow):
         
         if not utils.open_directory(backup_dir):
             QMessageBox.warning(self, "Error", "Failed to open directory")
-    
     def delete_game(self, game_name):
         confirm = QMessageBox.question(
             self,
@@ -1304,8 +1389,11 @@ class GameSaveBackup(QMainWindow):
             
             self.load_games()
             self.update_games_list()
-            QMessageBox.information(self, "Game Deleted", f"'{game_name}' has been removed.")
-
+            self.toast_manager.show_toast(
+                f"'{game_name}' has been removed.",
+                icon_type="success"
+            )
+    
     def restore_backup(self):
         from PySide6.QtWidgets import QDialog, QInputDialog, QLineEdit
         
@@ -1331,10 +1419,20 @@ class GameSaveBackup(QMainWindow):
         if confirm != QMessageBox.Yes:
             return
         
+        # First create a backup of current state
         self.backup_game(game_name)
+        
+        # Show progress dialog
+        progress = ProgressDialog(self, f"Restoring {game_name}")
+        progress.center_on_parent()
+        progress.show()
+        QApplication.processEvents()
         
         backup_dir = self.selected_backup["directory"]
         parent_dir = game_data.get("parent_dir", "")
+        
+        progress.set_detail("Loading backup configuration...")
+        QApplication.processEvents()
         
         parent_dir_file = os.path.join(backup_dir, "parent_dir.txt")
         if os.path.exists(parent_dir_file):
@@ -1343,8 +1441,18 @@ class GameSaveBackup(QMainWindow):
             if backup_parent_dir and not parent_dir:
                 parent_dir = backup_parent_dir
         
-        for save_path in game_data["save_paths"]:
+        save_paths = game_data["save_paths"]
+        total_paths = len(save_paths)
+        progress.set_progress_range(0, total_paths)
+        
+        success = True
+        
+        for idx, save_path in enumerate(save_paths):
             try:
+                progress.set_progress(idx)
+                progress.set_detail(f"Restoring: {os.path.basename(save_path)}")
+                QApplication.processEvents()
+                
                 if parent_dir and save_path.startswith(parent_dir):
                     rel_path = os.path.relpath(save_path, parent_dir)
                     src = os.path.join(backup_dir, rel_path)
@@ -1372,12 +1480,33 @@ class GameSaveBackup(QMainWindow):
                     else:
                         shutil.copy2(src, save_path)
                 else:
-                    QMessageBox.warning(self, "Restore Error", 
-                                      f"Could not find {os.path.basename(save_path)} in the backup.")
+                    self.toast_manager.show_toast(
+                        f"Could not find {os.path.basename(save_path)} in the backup.", 
+                        icon_type="warning", 
+                        duration=4000
+                    )
+                    success = False
             except Exception as e:
-                QMessageBox.warning(self, "Restore Error", f"Error restoring {save_path}: {e}")
+                self.toast_manager.show_toast(
+                    f"Error restoring {os.path.basename(save_path)}: {str(e)[:50]}", 
+                    icon_type="error",
+                    duration=5000
+                )
+                success = False
         
-        QMessageBox.information(self, "Restore Complete", f"Save files for {game_name} have been restored successfully!")
+        progress.set_progress(total_paths)
+        progress.close()
+        
+        if success:
+            self.toast_manager.show_toast(
+                f"Save files for {game_name} have been restored successfully!", 
+                icon_type="success"
+            )
+        else:
+            self.toast_manager.show_toast(
+                f"Some files from {game_name} could not be restored.", 
+                icon_type="warning"
+            )
 
     def set_igdb_api_source(self, source, force=False):
         if source not in ["ambidex", "legacy"]:
